@@ -1,19 +1,26 @@
 import argparse
 import datetime
+import glob
+import math
+import os
 import pickle
+import random
+import time
 
-import yaml
+import torch
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
+import yaml
 from torch.utils.tensorboard import SummaryWriter
 
-
-from models import *
-from utils.datasets import *
-from utils.utils import *
+from models import YOLOV3_SPP
 from train_utils import train_eval_utils as train_util
-from train_utils.distributed_utils import init_distributed_mode, torch_distributed_zero_first
 from train_utils.coco_utils import get_coco_api_from_dataset
+from train_utils.distributed_utils import init_distributed_mode, torch_distributed_zero_first
+from utils.datasets import LoadImageAndLabels
+from utils.model import YOLOLayer
+from utils.parse_config import parse_data_cfg
+from utils.utils import check_file
 
 
 def main(opt, hyp):

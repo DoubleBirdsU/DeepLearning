@@ -1,8 +1,9 @@
 import collections
-from PIL import Image
+
 import PIL.ImageDraw as ImageDraw
 import PIL.ImageFont as ImageFont
 import numpy as np
+from PIL import Image
 
 STANDARD_COLORS = [
     'AliceBlue', 'Chartreuse', 'Aqua', 'Aquamarine', 'Azure', 'Beige', 'Bisque',

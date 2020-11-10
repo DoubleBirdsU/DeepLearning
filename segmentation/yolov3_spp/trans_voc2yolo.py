@@ -3,12 +3,12 @@
 1.将voc数据集标注信息(.xml)转为yolo标注格式(.txt)，并将图像文件复制到相应文件夹
 2.根据json标签文件，生成对应names标签(my_data_label.names)
 """
-import os
-from tqdm import tqdm
-from lxml import etree
 import json
+import os
 import shutil
 
+from lxml import etree
+from tqdm import tqdm
 
 # voc数据集根目录以及版本
 voc_root = "/home/wnyl/.dataset"

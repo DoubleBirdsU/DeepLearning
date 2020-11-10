@@ -1,21 +1,21 @@
 import argparse
+import glob
 import math
 import os
-import torch
-import glob
 
-import yaml
+import torch
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
-
+import yaml
 from torch.utils.tensorboard import SummaryWriter
+
 from models import YOLOV3_SPP
+from train_utils import train_eval_utils as train_util
+from train_utils.coco_utils import get_coco_api_from_dataset
 from utils.datasets import LoadImageAndLabels
 from utils.model import YOLOLayer
 from utils.parse_config import parse_data_cfg
 from utils.utils import check_file
-from train_utils import train_eval_utils as train_util
-from train_utils.coco_utils import get_coco_api_from_dataset
 
 
 def train(hyp):

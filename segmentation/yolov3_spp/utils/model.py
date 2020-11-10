@@ -1,7 +1,7 @@
-import torch
 import math
-import torch.nn.functional as F
 
+import torch
+import torch.nn.functional as F
 from torch import nn
 
 from utils.base_model import base_model
@@ -140,6 +140,7 @@ class Model(base_model):
 class YOLOLayer(base_model):
     """对YOLO的输出进行处理
     """
+
     def __init__(self, anchors, num_classes, img_size, yolo_index, layers, stride):
         super(YOLOLayer, self).__init__()
         self.anchors = torch.Tensor(anchors)

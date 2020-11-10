@@ -1,9 +1,11 @@
 import time
+
 import cv2
+import numpy as np
 import onnx
 import onnxruntime
-import numpy as np
 from matplotlib import pyplot as plt
+
 from draw_box_utils import draw_box
 
 
@@ -157,7 +159,6 @@ def post_process(pred: np.ndarray, multi_label=False, conf_thres=0.3):
     """
     输入的xywh都是归一化后的值
     :param pred: [num_obj, [x1, y1, x2, y2, objectness, cls1, cls1...]]
-    :param img_size:
     :param multi_label:
     :param conf_thres:
     :return:

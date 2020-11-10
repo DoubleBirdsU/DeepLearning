@@ -1,13 +1,13 @@
-import json
 import copy
+import json
 from collections import defaultdict
 
 import numpy as np
+import pycocotools.mask as mask_util
 import torch
 import torch._six
-from pycocotools.cocoeval import COCOeval
 from pycocotools.coco import COCO
-import pycocotools.mask as mask_util
+from pycocotools.cocoeval import COCOeval
 
 from train_utils.distributed_utils import all_gather
 

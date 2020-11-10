@@ -1,12 +1,16 @@
+import math
+import random
 import sys
+import time
 
-from torch.cuda import amp
+import torch
 import torch.nn.functional as F
+from torch.cuda import amp
 
-from utils.utils import *
+import train_utils.distributed_utils as utils
 from train_utils.coco_eval import CocoEvaluator
 from train_utils.coco_utils import get_coco_api_from_dataset
-import train_utils.distributed_utils as utils
+from utils.utils import compute_loss, non_max_suppression, scale_coords
 
 
 def train_one_epoch(model, optimizer, data_loader, device, epoch,

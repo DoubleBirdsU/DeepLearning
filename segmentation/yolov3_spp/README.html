@@ -1,8 +1,12 @@
 <!doctype html>
 <html style='font-size:24px !important'>
 <head>
-<meta charset='UTF-8'><meta name='viewport' content='width=device-width initial-scale=1'>
-<title>README</title><link href='https://fonts.loli.net/css?family=Open+Sans:400italic,700italic,700,400&subset=latin,latin-ext' rel='stylesheet' type='text/css' /><style type='text/css'>html {overflow-x: initial !important;}:root { --bg-color:#ffffff; --text-color:#333333; --select-text-bg-color:#B5D6FC; --select-text-font-color:auto; --monospace:"Lucida Console",Consolas,"Courier",monospace; }
+    <meta charset='UTF-8'>
+    <meta content='width=device-width initial-scale=1' name='viewport'>
+    <title>README</title>
+    <link href='https://fonts.loli.net/css?family=Open+Sans:400italic,700italic,700,400&subset=latin,latin-ext'
+          rel='stylesheet' type='text/css'/>
+    <style type='text/css'>html {overflow-x: initial !important;}:root { --bg-color:#ffffff; --text-color:#333333; --select-text-bg-color:#B5D6FC; --select-text-font-color:auto; --monospace:"Lucida Console",Consolas,"Courier",monospace; }
 html { font-size: 14px; background-color: var(--bg-color); color: var(--text-color); font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
 body { margin: 0px; padding: 0px; height: auto; bottom: 0px; top: 0px; left: 0px; right: 0px; font-size: 1rem; line-height: 1.42857; overflow-x: hidden; background: inherit; tab-size: 4; }
 iframe { margin: auto; }
@@ -613,9 +617,324 @@ header, .context-menu, .megamenu-content, footer{
 }
 
 
-</style>
+
+
+    </style>
 </head>
 <body class='typora-export'>
-<div id='write'  class=''><h2><a name="yolov3-spp" class="md-header-anchor"></a><span>YOLOv3 SPP</span></h2><p><span>	</span><span>该项目源自 </span><a href='https://github.com/ultralytics/yolov3'><span>ultralytics/yolov3</span></a></p><h3><a name="1-环境配置" class="md-header-anchor"></a><span>1 环境配置</span></h3><ul><li><span>Python3.6或者3.7</span></li><li><span>Pytorch1.6(注意：必须是1.6.0或以上，因为使用官方提供的混合精度训练1.6.0后才支持)</span></li><li><span>pycocotools(Linux: </span><code>pip install pycocotools</code><span>; </span><br/><span>Windows: </span><code>pip install pycocotools-windows</code><span>(不需要额外安装vs))</span></li><li><span>更多环境配置信息，请查看</span><code>requirements.txt</code><span>文件</span></li><li><span>最好使用GPU训练</span></li></ul><h3><a name="2-文件结构" class="md-header-anchor"></a><span>2 文件结构</span></h3><pre spellcheck="false" class="md-fences md-end-block ty-contain-cm modeLoaded" lang="bash" style="break-inside: unset;"><div class="CodeMirror cm-s-inner CodeMirror-wrap" lang="bash"><div style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 0px; left: 8px;"><textarea autocorrect="off" autocapitalize="off" spellcheck="false" tabindex="0" style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: none;"></textarea></div><div class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler" cm-not-content="true"></div><div class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer" style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div role="presentation" style="position: relative; outline: none;"><div class="CodeMirror-measure"></div><div class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div class="CodeMirror-code" role="presentation" style=""><div class="CodeMirror-activeline" style="position: relative;"><div class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── cfg: 配置文件目录</span></pre></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp;  ├── hyp.yaml: 训练网络的相关超参数</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp;  └── yolov3-spp.cfg: yolov3-spp网络结构配置 </span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ </span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── data: 存储训练时数据集相关信息缓存</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp;  └── pascal_voc_classes.json: pascal voc数据集标签</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ </span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── runs: 保存训练过程中生成的所有tensorboard相关文件</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── utils: 搭建训练网络时使用到的工具</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp; &nbsp; ├── datasets.py: 数据读取以及预处理方法</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp; &nbsp; ├── img_utils.py: 部分图像处理方法</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp; &nbsp; ├── layers.py: 实现的一些基础层结构</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp; &nbsp; ├── parse_config.py: 解析yolov3-spp.cfg文件</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp; &nbsp; ├── torch_utils.py: 使用pytorch实现的一些工具</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp; &nbsp; └── utils.py: 训练网络过程中使用到的一些方法</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── train_utils: 训练验证网络时使用到的工具(包括多GPU训练以及使用cocotools)</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── weights: 所有相关预训练权重(下面会给出百度云的下载地址)</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── model.py: 模型搭建文件</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── train.py: 针对单GPU或者CPU的用户使用</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── train_multi_GPU.py: 针对使用多GPU的用户使用</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── trans_voc2yolo.py: 将voc数据集标注信息(.xml)转为yolo标注格式(.txt)</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── calculate_dataset.py: <span class="cm-number">1</span>)统计训练集和验证集的数据并生成相应.txt文件</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; <span class="cm-number">2</span>)创建data.data文件</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; <span class="cm-number">3</span>)根据yolov3-spp.cfg结合数据集类别数创建my_yolov3.cfg文件</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  └── predict_test.py: 简易的预测脚本，使用训练好的权重进行预测测试</span></pre></div></div></div></div></div><div style="position: absolute; height: 0px; width: 1px; border-bottom: 0px solid transparent; top: 884px;"></div><div class="CodeMirror-gutters" style="display: none; height: 884px;"></div></div></div></pre><h3><a name="3-训练数据的准备以及目录结构" class="md-header-anchor"></a><span>3 训练数据的准备以及目录结构</span></h3><ul><li><span>这里建议标注数据时直接生成yolo格式的标签文件</span><code>.txt</code><span>，推荐使用免费开源的标注软件(支持yolo格式)，</span><a href='https://github.com/tzutalin/labelImg'><span>labelImg</span></a></li><li><span>如果之前已经标注成pascal voc的</span><code>.xml</code><span>格式了也没关系，我写了个voc转yolo格式的转化脚本，下面会讲怎么使用</span></li><li><span>将自己数据集中的图像大小缩放到与coco数据集一致(图像预处理算法决定的)</span></li><li><span>测试图像时最好将图像缩放到32的倍数</span></li><li><span>标注好的数据集请按照以下目录结构进行摆放:</span></li></ul><pre spellcheck="false" class="md-fences md-end-block ty-contain-cm modeLoaded md-focus" lang="bash"><div class="CodeMirror cm-s-inner CodeMirror-wrap CodeMirror-focused" lang="bash"><div style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 136px; left: 478.828px;"><textarea autocorrect="off" autocapitalize="off" spellcheck="false" tabindex="0" style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: none;"></textarea></div><div class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler" cm-not-content="true"></div><div class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer" style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div role="presentation" style="position: relative; outline: none;"><div class="CodeMirror-measure"></div><div class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div class="CodeMirror-code" role="presentation" style=""><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">├── my_yolo_dataset <span class="cm-tab" role="presentation" cm-text="	">    </span><span class="cm-tab" role="presentation" cm-text="	">    </span>自定义数据集根目录</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp; &nbsp; &nbsp; &nbsp; ├── train &nbsp; <span class="cm-tab" role="presentation" cm-text="	">  </span><span class="cm-tab" role="presentation" cm-text="	">    </span>训练集目录</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp; &nbsp; &nbsp; &nbsp; │ &nbsp; &nbsp; ├── images  训练集图像目录</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp; &nbsp; &nbsp; &nbsp; │ &nbsp; &nbsp; └── labels  训练集标签目录 </span></pre><div class="CodeMirror-activeline" style="position: relative;"><div class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp; &nbsp; &nbsp; &nbsp; └── val &nbsp;  <span class="cm-tab" role="presentation" cm-text="	">   </span><span class="cm-tab" role="presentation" cm-text="	">    </span>验证集目录</span></pre></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ├── images  验证集图像目录</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; └── labels  验证集标签目录 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;</span></pre></div></div></div></div></div><div style="position: absolute; height: 0px; width: 1px; border-bottom: 0px solid transparent; top: 238px;"></div><div class="CodeMirror-gutters" style="display: none; height: 238px;"></div></div></div></pre><h3><a name="4-数据处理" class="md-header-anchor"></a><span>4 数据处理</span></h3><p><span>	</span><span>利用标注好的数据集生成一系列相关准备文件，为了方便我写了个脚本，通过脚本可直接生成。也可参考原作者的 </span><a href='https://github.com/ultralytics/yolov3/wiki/Train-Custom-Data'><span>教程</span></a></p><pre spellcheck="false" class="md-fences md-end-block ty-contain-cm modeLoaded" lang="bash"><div class="CodeMirror cm-s-inner CodeMirror-wrap" lang="bash"><div style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 0px; left: 8px;"><textarea autocorrect="off" autocapitalize="off" spellcheck="false" tabindex="0" style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: none;"></textarea></div><div class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler" cm-not-content="true"></div><div class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer" style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div role="presentation" style="position: relative; outline: none;"><div class="CodeMirror-measure"></div><div class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div class="CodeMirror-code" role="presentation" style=""><div class="CodeMirror-activeline" style="position: relative;"><div class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">├── data 利用数据集生成的一系列相关准备文件目录</span></pre></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp;  ├── my_train_data.txt:  该文件里存储的是所有训练图片的路径地址</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp;  ├── my_val_data.txt:  该文件里存储的是所有验证图片的路径地址</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp;  ├── my_data_label.names:  该文件里存储的是所有类别的名称，一个类别对应一行(这里会根据<span class="cm-quote">```.json```</span>文件自动生成)</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp;  └── my_data.data:  该文件里记录的是类别数类别信息、train以及valid对应的txt文件</span></pre></div></div></div></div></div><div style="position: absolute; height: 0px; width: 1px; border-bottom: 0px solid transparent; top: 204px;"></div><div class="CodeMirror-gutters" style="display: none; height: 204px;"></div></div></div></pre><h4><a name="41-voc-转-yolo" class="md-header-anchor"></a><span>4.1 VOC 转 YOLO</span></h4><p><span>	</span><span>将VOC标注数据转为YOLO标注数据(如果你的数据已经是YOLO格式了，可跳过该步骤)</span></p><ul><li><span>使用</span><code>trans_voc2yolo.py</code><span>脚本进行转换，并在</span><code>./data/</code><span>文件夹下生成</span><code>my_data_label.names</code><span>标签文件，</span></li><li><span>执行脚本前，需要根据自己的路径修改以下参数</span></li></ul><pre spellcheck="false" class="md-fences md-end-block ty-contain-cm modeLoaded" lang="python"><div class="CodeMirror cm-s-inner CodeMirror-wrap" lang="python"><div style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 0px; left: 8px;"><textarea autocorrect="off" autocapitalize="off" spellcheck="false" tabindex="0" style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: none;"></textarea></div><div class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler" cm-not-content="true"></div><div class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer" style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div role="presentation" style="position: relative; outline: none;"><div class="CodeMirror-measure"></div><div class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div class="CodeMirror-code" role="presentation" style=""><div class="CodeMirror-activeline" style="position: relative;"><div class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-comment"># voc数据集根目录以及版本</span></span></pre></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">voc_root</span> = <span class="cm-string">"./VOCdevkit"</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">voc_version</span> = <span class="cm-string">"VOC2012"</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span cm-text="">​</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-comment"># 转换的训练集以及验证集对应txt文件，对应VOCdevkit/VOC2012/ImageSets/Main文件夹下的txt文件</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">train_txt</span> = <span class="cm-string">"train.txt"</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">val_txt</span> = <span class="cm-string">"val.txt"</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span cm-text="">​</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-comment"># 转换后的文件保存目录</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">save_file_root</span> = <span class="cm-string">"/home/wz/my_project/my_yolo_dataset"</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span cm-text="">​</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-comment"># label标签对应json文件</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">label_json_path</span> = <span class="cm-string">'./data/pascal_voc_classes.json'</span></span></pre></div></div></div></div></div><div style="position: absolute; height: 0px; width: 1px; border-bottom: 0px solid transparent; top: 442px;"></div><div class="CodeMirror-gutters" style="display: none; height: 442px;"></div></div></div></pre><ul><li><span>生成的 </span><code>my_data_label.names</code><span> 标签文件格式如下</span></li></ul><pre spellcheck="false" class="md-fences md-end-block ty-contain-cm modeLoaded" lang="text"><div class="CodeMirror cm-s-inner CodeMirror-wrap" lang="text"><div style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 0px; left: 8px;"><textarea autocorrect="off" autocapitalize="off" spellcheck="false" tabindex="0" style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: none;"></textarea></div><div class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler" cm-not-content="true"></div><div class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer" style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div role="presentation" style="position: relative; outline: none;"><div class="CodeMirror-measure"></div><div class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div class="CodeMirror-code" role="presentation" style=""><div class="CodeMirror-activeline" style="position: relative;"><div class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">aeroplane</span></pre></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">bicycle</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">bird</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">boat</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">bottle</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">bus</span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">...</span></pre></div></div></div></div></div><div style="position: absolute; height: 0px; width: 1px; border-bottom: 0px solid transparent; top: 238px;"></div><div class="CodeMirror-gutters" style="display: none; height: 238px;"></div></div></div></pre><h4><a name="42-生成相关文件" class="md-header-anchor"></a><span>4.2 生成相关文件</span></h4><p><span>	</span><span>根据摆放好的数据集信息生成一系列相关准备文件</span></p><ul><li><span>使用 </span><code>calculate_dataset.py</code><span> 脚本生成 </span><code>my_train_data.txt</code><span> 文件、</span><code>my_val_data.txt</code><span> 文件以及 </span><code>my_data.data</code><span> 文件，并生成新的 </span><code>my_yolov3.cfg</code><span> 文件</span></li><li><span>执行脚本前，需要根据自己的路径修改以下参数</span></li></ul><pre spellcheck="false" class="md-fences md-end-block ty-contain-cm modeLoaded" lang="python"><div class="CodeMirror cm-s-inner CodeMirror-wrap" lang="python"><div style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 0px; left: 8px;"><textarea autocorrect="off" autocapitalize="off" spellcheck="false" tabindex="0" style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: none;"></textarea></div><div class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler" cm-not-content="true"></div><div class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer" style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div role="presentation" style="position: relative; outline: none;"><div class="CodeMirror-measure"></div><div class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div class="CodeMirror-code" role="presentation" style=""><div class="CodeMirror-activeline" style="position: relative;"><div class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-comment"># 训练集的labels目录路径</span></span></pre></div><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">train_annotation_dir</span> = <span class="cm-string">"/home/wz/my_project/my_yolo_dataset/train/labels"</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-comment"># 验证集的labels目录路径</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">val_annotation_dir</span> = <span class="cm-string">"/home/wz/my_project/my_yolo_dataset/val/labels"</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-comment"># 上一步生成的my_data_label.names文件路径(如果没有该文件，可以自己手动编辑一个txt文档，然后重命名为.names格式即可)</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">classes_label</span> = <span class="cm-string">"./data/my_data_label.names"</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-comment"># 原始yolov3-spp.cfg网络结构配置文件</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">cfg_path</span> = <span class="cm-string">"./cfg/yolov3-spp.cfg"</span></span></pre></div></div></div></div></div><div style="position: absolute; height: 0px; width: 1px; border-bottom: 0px solid transparent; top: 306px;"></div><div class="CodeMirror-gutters" style="display: none; height: 306px;"></div></div></div></pre><h3><a name="5-权重" class="md-header-anchor"></a><span>5 权重</span></h3><p><span>	</span><span>预训练权重下载地址（下载后放入weights文件夹中）：</span></p><ul><li><code>yolov3-spp-ultralytics-416.pt</code><span>: 链接: </span><a href='https://pan.baidu.com/s/1cK3USHKxDx-d5dONij52lA' target='_blank' class='url'>https://pan.baidu.com/s/1cK3USHKxDx-d5dONij52lA</a><span>  密码: r3vm</span></li><li><code>yolov3-spp-ultralytics-512.pt</code><span>: 链接: </span><a href='https://pan.baidu.com/s/1k5yeTZZNv8Xqf0uBXnUK-g' target='_blank' class='url'>https://pan.baidu.com/s/1k5yeTZZNv8Xqf0uBXnUK-g</a><span>  密码: e3k1</span></li><li><code>yolov3-spp-ultralytics-608.pt</code><span>: 链接: </span><a href='https://pan.baidu.com/s/1GI8BA0wxeWMC0cjrC01G7Q' target='_blank' class='url'>https://pan.baidu.com/s/1GI8BA0wxeWMC0cjrC01G7Q</a><span>  密码: ma3t</span></li><li><code>yolov3spp-voc-512.pth</code><span> </span><strong><span>(这是我在视频演示训练中得到的权重)</span></strong><span>: 链接: </span><a href='https://pan.baidu.com/s/1fzXPFYvPy95Q9f5IR5Voqg' target='_blank' class='url'>https://pan.baidu.com/s/1fzXPFYvPy95Q9f5IR5Voqg</a><span>  密码: ct2n</span></li></ul><h3><a name="6-训练数据集" class="md-header-anchor"></a><span>6 训练数据集</span></h3><p><span>	</span><span>本例程使用的是PASCAL VOC2012数据集</span></p><ul><li><code>Pascal VOC2012</code><span> train/val 数据集下载地址：</span><a href='http://host.robots.ox.ac.uk/pascal/VOC/voc2012/VOCtrainval_11-May-2012.tar' target='_blank' class='url'>http://host.robots.ox.ac.uk/pascal/VOC/voc2012/VOCtrainval_11-May-2012.tar</a></li><li><span>如果不了解数据集或者想使用自己的数据集进行训练，请参考我的bilibili：</span><a href='https://b23.tv/F1kSCK' target='_blank' class='url'>https://b23.tv/F1kSCK</a></li></ul><h3><a name="7-使用方法" class="md-header-anchor"></a><span>7 使用方法</span></h3><ul><li><span>确保提前准备好数据集</span></li><li><span>确保提前下载好对应预训练模型权重</span></li><li><span>若要使用单GPU训练或者使用CPU训练，直接使用train.py训练脚本</span></li><li><span>若要使用多GPU训练，使用 </span><code>python -m torch.distributed.launch --nproc_per_node=8 --use_env train_multi_GPU.py</code><span> 指令, </span><code>nproc_per_node</code><span> 参数为使用GPU数量</span></li></ul><h3><a name="附录" class="md-header-anchor"></a><span>附录</span></h3><h4><a name="附录a参考我的bilibili" class="md-header-anchor"></a><span>附录A：参考我的bilibili</span></h4><p><span>	</span><span>如果对 YOLOv3 SPP 网络原理不是很理解可参考 </span><a href='https://www.bilibili.com/video/BV1yi4y1g7ro?p=3'><span>教程</span></a><span> 。</span></p><h4><a name="附录byolov3-spp框架图" class="md-header-anchor"></a><span>附录B：YOLOv3 SPP框架图</span></h4><p><img src="./yolov3spp.png" referrerpolicy="no-referrer" alt="yolov3spp"><span> </span></p></div>
+<div class='' id='write'><h2><a class="md-header-anchor" name="yolov3-spp"></a><span>YOLOv3 SPP</span></h2>
+    <p><span>	</span><span>该项目源自 </span><a
+            href='https://github.com/ultralytics/yolov3'><span>ultralytics/yolov3</span></a></p>
+    <h3><a class="md-header-anchor" name="1-环境配置"></a><span>1 环境配置</span></h3>
+    <ul>
+        <li><span>Python3.6或者3.7</span></li>
+        <li><span>Pytorch1.6(注意：必须是1.6.0或以上，因为使用官方提供的混合精度训练1.6.0后才支持)</span></li>
+        <li><span>pycocotools(Linux: </span><code>pip install
+            pycocotools</code><span>; </span><br/><span>Windows: </span><code>pip install
+            pycocotools-windows</code><span>(不需要额外安装vs))</span></li>
+        <li><span>更多环境配置信息，请查看</span><code>requirements.txt</code><span>文件</span></li>
+        <li><span>最好使用GPU训练</span></li>
+    </ul>
+    <h3><a class="md-header-anchor" name="2-文件结构"></a><span>2 文件结构</span></h3>
+    <pre class="md-fences md-end-block ty-contain-cm modeLoaded" lang="bash" spellcheck="false"
+         style="break-inside: unset;"><div class="CodeMirror cm-s-inner CodeMirror-wrap" lang="bash"><div
+            style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 0px; left: 8px;"><textarea
+            autocapitalize="off" autocorrect="off" spellcheck="false"
+            style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: none;"
+            tabindex="0"></textarea></div><div
+            class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler"
+                                                                                 cm-not-content="true"></div><div
+            class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer"
+                                                         style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div
+            style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div
+            role="presentation" style="position: relative; outline: none;"><div class="CodeMirror-measure"></div><div
+            class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div
+            class="CodeMirror-code" role="presentation" style=""><div class="CodeMirror-activeline"
+                                                                      style="position: relative;"><div
+            class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div
+            class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── cfg: 配置文件目录</span></pre></div><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp;  ├── hyp.yaml: 训练网络的相关超参数</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp;  └── yolov3-spp.cfg: yolov3-spp网络结构配置 </span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation"
+                                                                style="padding-right: 0.1px;">  │ </span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── data: 存储训练时数据集相关信息缓存</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp;  └── pascal_voc_classes.json: pascal voc数据集标签</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation"
+                                                                style="padding-right: 0.1px;">  │ </span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── runs: 保存训练过程中生成的所有tensorboard相关文件</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── utils: 搭建训练网络时使用到的工具</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp; &nbsp; ├── datasets.py: 数据读取以及预处理方法</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp; &nbsp; ├── img_utils.py: 部分图像处理方法</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp; &nbsp; ├── layers.py: 实现的一些基础层结构</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp; &nbsp; ├── parse_config.py: 解析yolov3-spp.cfg文件</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp; &nbsp; ├── torch_utils.py: 使用pytorch实现的一些工具</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  │ &nbsp; &nbsp; └── utils.py: 训练网络过程中使用到的一些方法</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation"
+                                                                style="padding-right: 0.1px;">  │</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── train_utils: 训练验证网络时使用到的工具(包括多GPU训练以及使用cocotools)</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── weights: 所有相关预训练权重(下面会给出百度云的下载地址)</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── model.py: 模型搭建文件</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── train.py: 针对单GPU或者CPU的用户使用</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── train_multi_GPU.py: 针对使用多GPU的用户使用</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── trans_voc2yolo.py: 将voc数据集标注信息(.xml)转为yolo标注格式(.txt)</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  ├── calculate_dataset.py: <span
+            class="cm-number">1</span>)统计训练集和验证集的数据并生成相应.txt文件</span></pre><pre class=" CodeMirror-line "
+                                                                                role="presentation"><span
+            role="presentation" style="padding-right: 0.1px;">  │ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; <span
+            class="cm-number">2</span>)创建data.data文件</span></pre><pre class=" CodeMirror-line "
+                                                                      role="presentation"><span role="presentation"
+                                                                                                style="padding-right: 0.1px;">  │ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; <span
+            class="cm-number">3</span>)根据yolov3-spp.cfg结合数据集类别数创建my_yolov3.cfg文件</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">  └── predict_test.py: 简易的预测脚本，使用训练好的权重进行预测测试</span></pre></div></div></div></div></div><div
+            style="position: absolute; height: 0px; width: 1px; border-bottom: 0px solid transparent; top: 884px;"></div><div
+            class="CodeMirror-gutters" style="display: none; height: 884px;"></div></div></div></pre>
+    <h3><a class="md-header-anchor" name="3-训练数据的准备以及目录结构"></a><span>3 训练数据的准备以及目录结构</span></h3>
+    <ul>
+        <li><span>这里建议标注数据时直接生成yolo格式的标签文件</span><code>.txt</code><span>，推荐使用免费开源的标注软件(支持yolo格式)，</span><a
+                href='https://github.com/tzutalin/labelImg'><span>labelImg</span></a></li>
+        <li><span>如果之前已经标注成pascal voc的</span><code>.xml</code><span>格式了也没关系，我写了个voc转yolo格式的转化脚本，下面会讲怎么使用</span></li>
+        <li><span>将自己数据集中的图像大小缩放到与coco数据集一致(图像预处理算法决定的)</span></li>
+        <li><span>测试图像时最好将图像缩放到32的倍数</span></li>
+        <li><span>标注好的数据集请按照以下目录结构进行摆放:</span></li>
+    </ul>
+    <pre class="md-fences md-end-block ty-contain-cm modeLoaded md-focus" lang="bash" spellcheck="false"><div
+            class="CodeMirror cm-s-inner CodeMirror-wrap CodeMirror-focused" lang="bash"><div
+            style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 136px; left: 478.828px;"><textarea
+            autocapitalize="off" autocorrect="off" spellcheck="false"
+            style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: none;"
+            tabindex="0"></textarea></div><div
+            class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler"
+                                                                                 cm-not-content="true"></div><div
+            class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer"
+                                                         style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div
+            style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div
+            role="presentation" style="position: relative; outline: none;"><div class="CodeMirror-measure"></div><div
+            class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div
+            class="CodeMirror-code" role="presentation" style=""><pre class=" CodeMirror-line "
+                                                                      role="presentation"><span role="presentation"
+                                                                                                style="padding-right: 0.1px;">├── my_yolo_dataset <span
+            class="cm-tab" cm-text="	" role="presentation">    </span><span class="cm-tab" cm-text="	"
+                                                                               role="presentation">    </span>自定义数据集根目录</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp; &nbsp; &nbsp; &nbsp; ├── train &nbsp; <span
+            class="cm-tab" cm-text="	" role="presentation">  </span><span class="cm-tab" cm-text="	"
+                                                                             role="presentation">    </span>训练集目录</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp; &nbsp; &nbsp; &nbsp; │ &nbsp; &nbsp; ├── images  训练集图像目录</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp; &nbsp; &nbsp; &nbsp; │ &nbsp; &nbsp; └── labels  训练集标签目录 </span></pre><div
+            class="CodeMirror-activeline" style="position: relative;"><div
+            class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div
+            class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp; &nbsp; &nbsp; &nbsp; └── val &nbsp;  <span
+            class="cm-tab" cm-text="	" role="presentation">   </span><span class="cm-tab" cm-text="	"
+                                                                              role="presentation">    </span>验证集目录</span></pre></div><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ├── images  验证集图像目录</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; └── labels  验证集标签目录 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;</span></pre></div></div></div></div></div><div
+            style="position: absolute; height: 0px; width: 1px; border-bottom: 0px solid transparent; top: 238px;"></div><div
+            class="CodeMirror-gutters" style="display: none; height: 238px;"></div></div></div></pre>
+    <h3><a class="md-header-anchor" name="4-数据处理"></a><span>4 数据处理</span></h3>
+    <p><span>	</span><span>利用标注好的数据集生成一系列相关准备文件，为了方便我写了个脚本，通过脚本可直接生成。也可参考原作者的 </span><a
+            href='https://github.com/ultralytics/yolov3/wiki/Train-Custom-Data'><span>教程</span></a></p>
+    <pre class="md-fences md-end-block ty-contain-cm modeLoaded" lang="bash" spellcheck="false"><div
+            class="CodeMirror cm-s-inner CodeMirror-wrap" lang="bash"><div
+            style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 0px; left: 8px;"><textarea
+            autocapitalize="off" autocorrect="off" spellcheck="false"
+            style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: none;"
+            tabindex="0"></textarea></div><div
+            class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler"
+                                                                                 cm-not-content="true"></div><div
+            class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer"
+                                                         style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div
+            style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div
+            role="presentation" style="position: relative; outline: none;"><div class="CodeMirror-measure"></div><div
+            class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div
+            class="CodeMirror-code" role="presentation" style=""><div class="CodeMirror-activeline"
+                                                                      style="position: relative;"><div
+            class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div
+            class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">├── data 利用数据集生成的一系列相关准备文件目录</span></pre></div><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp;  ├── my_train_data.txt:  该文件里存储的是所有训练图片的路径地址</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp;  ├── my_val_data.txt:  该文件里存储的是所有验证图片的路径地址</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">│ &nbsp;  ├── my_data_label.names:  该文件里存储的是所有类别的名称，一个类别对应一行(这里会根据<span
+            class="cm-quote">```.json```</span>文件自动生成)</span></pre><pre class=" CodeMirror-line "
+                                                                        role="presentation"><span role="presentation"
+                                                                                                  style="padding-right: 0.1px;">│ &nbsp;  └── my_data.data:  该文件里记录的是类别数类别信息、train以及valid对应的txt文件</span></pre></div></div></div></div></div><div
+            style="position: absolute; height: 0px; width: 1px; border-bottom: 0px solid transparent; top: 204px;"></div><div
+            class="CodeMirror-gutters" style="display: none; height: 204px;"></div></div></div></pre>
+    <h4><a class="md-header-anchor" name="41-voc-转-yolo"></a><span>4.1 VOC 转 YOLO</span></h4>
+    <p><span>	</span><span>将VOC标注数据转为YOLO标注数据(如果你的数据已经是YOLO格式了，可跳过该步骤)</span></p>
+    <ul>
+        <li>
+            <span>使用</span><code>trans_voc2yolo.py</code><span>脚本进行转换，并在</span><code>./data/</code><span>文件夹下生成</span><code>my_data_label.names</code><span>标签文件，</span>
+        </li>
+        <li><span>执行脚本前，需要根据自己的路径修改以下参数</span></li>
+    </ul>
+    <pre class="md-fences md-end-block ty-contain-cm modeLoaded" lang="python" spellcheck="false"><div
+            class="CodeMirror cm-s-inner CodeMirror-wrap" lang="python"><div
+            style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 0px; left: 8px;"><textarea
+            autocapitalize="off" autocorrect="off" spellcheck="false"
+            style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: none;"
+            tabindex="0"></textarea></div><div
+            class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler"
+                                                                                 cm-not-content="true"></div><div
+            class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer"
+                                                         style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div
+            style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div
+            role="presentation" style="position: relative; outline: none;"><div class="CodeMirror-measure"></div><div
+            class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div
+            class="CodeMirror-code" role="presentation" style=""><div class="CodeMirror-activeline"
+                                                                      style="position: relative;"><div
+            class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div
+            class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span
+            class="cm-comment"># voc数据集根目录以及版本</span></span></pre></div><pre class=" CodeMirror-line "
+                                                                             role="presentation"><span
+            role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">voc_root</span> = <span
+            class="cm-string">"./VOCdevkit"</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span
+            role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">voc_version</span> = <span
+            class="cm-string">"VOC2012"</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span
+            role="presentation" style="padding-right: 0.1px;"><span cm-text="">​</span></span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span
+            class="cm-comment"># 转换的训练集以及验证集对应txt文件，对应VOCdevkit/VOC2012/ImageSets/Main文件夹下的txt文件</span></span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span
+            class="cm-variable">train_txt</span> = <span class="cm-string">"train.txt"</span></span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span
+            class="cm-variable">val_txt</span> = <span class="cm-string">"val.txt"</span></span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span
+            cm-text="">​</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span role="presentation"
+                                                                                                     style="padding-right: 0.1px;"><span
+            class="cm-comment"># 转换后的文件保存目录</span></span></pre><pre class=" CodeMirror-line " role="presentation"><span
+            role="presentation" style="padding-right: 0.1px;"><span class="cm-variable">save_file_root</span> = <span
+            class="cm-string">"/home/wz/my_project/my_yolo_dataset"</span></span></pre><pre class=" CodeMirror-line "
+                                                                                            role="presentation"><span
+            role="presentation" style="padding-right: 0.1px;"><span cm-text="">​</span></span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span
+            class="cm-comment"># label标签对应json文件</span></span></pre><pre class=" CodeMirror-line "
+                                                                         role="presentation"><span role="presentation"
+                                                                                                   style="padding-right: 0.1px;"><span
+            class="cm-variable">label_json_path</span> = <span class="cm-string">'./data/pascal_voc_classes.json'</span></span></pre></div></div></div></div></div><div
+            style="position: absolute; height: 0px; width: 1px; border-bottom: 0px solid transparent; top: 442px;"></div><div
+            class="CodeMirror-gutters" style="display: none; height: 442px;"></div></div></div></pre>
+    <ul>
+        <li><span>生成的 </span><code>my_data_label.names</code><span> 标签文件格式如下</span></li>
+    </ul>
+    <pre class="md-fences md-end-block ty-contain-cm modeLoaded" lang="text" spellcheck="false"><div
+            class="CodeMirror cm-s-inner CodeMirror-wrap" lang="text"><div
+            style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 0px; left: 8px;"><textarea
+            autocapitalize="off" autocorrect="off" spellcheck="false"
+            style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: none;"
+            tabindex="0"></textarea></div><div
+            class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler"
+                                                                                 cm-not-content="true"></div><div
+            class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer"
+                                                         style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div
+            style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div
+            role="presentation" style="position: relative; outline: none;"><div class="CodeMirror-measure"></div><div
+            class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div
+            class="CodeMirror-code" role="presentation" style=""><div class="CodeMirror-activeline"
+                                                                      style="position: relative;"><div
+            class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div
+            class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">aeroplane</span></pre></div><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;">bicycle</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation"
+                                                                style="padding-right: 0.1px;">bird</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation"
+                                                                style="padding-right: 0.1px;">boat</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation"
+                                                                style="padding-right: 0.1px;">bottle</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation"
+                                                                style="padding-right: 0.1px;">bus</span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation"
+                                                                style="padding-right: 0.1px;">...</span></pre></div></div></div></div></div><div
+            style="position: absolute; height: 0px; width: 1px; border-bottom: 0px solid transparent; top: 238px;"></div><div
+            class="CodeMirror-gutters" style="display: none; height: 238px;"></div></div></div></pre>
+    <h4><a class="md-header-anchor" name="42-生成相关文件"></a><span>4.2 生成相关文件</span></h4>
+    <p><span>	</span><span>根据摆放好的数据集信息生成一系列相关准备文件</span></p>
+    <ul>
+        <li>
+            <span>使用 </span><code>calculate_dataset.py</code><span> 脚本生成 </span><code>my_train_data.txt</code><span> 文件、</span><code>my_val_data.txt</code><span> 文件以及 </span><code>my_data.data</code><span> 文件，并生成新的 </span><code>my_yolov3.cfg</code><span> 文件</span>
+        </li>
+        <li><span>执行脚本前，需要根据自己的路径修改以下参数</span></li>
+    </ul>
+    <pre class="md-fences md-end-block ty-contain-cm modeLoaded" lang="python" spellcheck="false"><div
+            class="CodeMirror cm-s-inner CodeMirror-wrap" lang="python"><div
+            style="overflow: hidden; position: relative; width: 3px; height: 0px; top: 0px; left: 8px;"><textarea
+            autocapitalize="off" autocorrect="off" spellcheck="false"
+            style="position: absolute; bottom: -1em; padding: 0px; width: 1000px; height: 1em; outline: none;"
+            tabindex="0"></textarea></div><div
+            class="CodeMirror-scrollbar-filler" cm-not-content="true"></div><div class="CodeMirror-gutter-filler"
+                                                                                 cm-not-content="true"></div><div
+            class="CodeMirror-scroll" tabindex="-1"><div class="CodeMirror-sizer"
+                                                         style="margin-left: 0px; margin-bottom: 0px; border-right-width: 0px; padding-right: 0px; padding-bottom: 0px;"><div
+            style="position: relative; top: 0px;"><div class="CodeMirror-lines" role="presentation"><div
+            role="presentation" style="position: relative; outline: none;"><div class="CodeMirror-measure"></div><div
+            class="CodeMirror-measure"></div><div style="position: relative; z-index: 1;"></div><div
+            class="CodeMirror-code" role="presentation" style=""><div class="CodeMirror-activeline"
+                                                                      style="position: relative;"><div
+            class="CodeMirror-activeline-background CodeMirror-linebackground"></div><div
+            class="CodeMirror-gutter-background CodeMirror-activeline-gutter" style="left: 0px; width: 0px;"></div><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span
+            class="cm-comment"># 训练集的labels目录路径</span></span></pre></div><pre class=" CodeMirror-line "
+                                                                              role="presentation"><span
+            role="presentation" style="padding-right: 0.1px;"><span
+            class="cm-variable">train_annotation_dir</span> = <span class="cm-string">"/home/wz/my_project/my_yolo_dataset/train/labels"</span></span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span
+            class="cm-comment"># 验证集的labels目录路径</span></span></pre><pre class=" CodeMirror-line "
+                                                                        role="presentation"><span role="presentation"
+                                                                                                  style="padding-right: 0.1px;"><span
+            class="cm-variable">val_annotation_dir</span> = <span class="cm-string">"/home/wz/my_project/my_yolo_dataset/val/labels"</span></span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span
+            class="cm-comment"># 上一步生成的my_data_label.names文件路径(如果没有该文件，可以自己手动编辑一个txt文档，然后重命名为.names格式即可)</span></span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span
+            class="cm-variable">classes_label</span> = <span
+            class="cm-string">"./data/my_data_label.names"</span></span></pre><pre class=" CodeMirror-line "
+                                                                                   role="presentation"><span
+            role="presentation" style="padding-right: 0.1px;"><span class="cm-comment"># 原始yolov3-spp.cfg网络结构配置文件</span></span></pre><pre
+            class=" CodeMirror-line " role="presentation"><span role="presentation" style="padding-right: 0.1px;"><span
+            class="cm-variable">cfg_path</span> = <span
+            class="cm-string">"./cfg/yolov3-spp.cfg"</span></span></pre></div></div></div></div></div><div
+            style="position: absolute; height: 0px; width: 1px; border-bottom: 0px solid transparent; top: 306px;"></div><div
+            class="CodeMirror-gutters" style="display: none; height: 306px;"></div></div></div></pre>
+    <h3><a class="md-header-anchor" name="5-权重"></a><span>5 权重</span></h3>
+    <p><span>	</span><span>预训练权重下载地址（下载后放入weights文件夹中）：</span></p>
+    <ul>
+        <li><code>yolov3-spp-ultralytics-416.pt</code><span>: 链接: </span><a
+                class='url' href='https://pan.baidu.com/s/1cK3USHKxDx-d5dONij52lA' target='_blank'>https://pan.baidu.com/s/1cK3USHKxDx-d5dONij52lA</a><span>  密码: r3vm</span>
+        </li>
+        <li><code>yolov3-spp-ultralytics-512.pt</code><span>: 链接: </span><a
+                class='url' href='https://pan.baidu.com/s/1k5yeTZZNv8Xqf0uBXnUK-g' target='_blank'>https://pan.baidu.com/s/1k5yeTZZNv8Xqf0uBXnUK-g</a><span>  密码: e3k1</span>
+        </li>
+        <li><code>yolov3-spp-ultralytics-608.pt</code><span>: 链接: </span><a
+                class='url' href='https://pan.baidu.com/s/1GI8BA0wxeWMC0cjrC01G7Q' target='_blank'>https://pan.baidu.com/s/1GI8BA0wxeWMC0cjrC01G7Q</a><span>  密码: ma3t</span>
+        </li>
+        <li>
+            <code>yolov3spp-voc-512.pth</code><span> </span><strong><span>(这是我在视频演示训练中得到的权重)</span></strong><span>: 链接: </span><a
+                class='url' href='https://pan.baidu.com/s/1fzXPFYvPy95Q9f5IR5Voqg' target='_blank'>https://pan.baidu.com/s/1fzXPFYvPy95Q9f5IR5Voqg</a><span>  密码: ct2n</span>
+        </li>
+    </ul>
+    <h3><a class="md-header-anchor" name="6-训练数据集"></a><span>6 训练数据集</span></h3>
+    <p><span>	</span><span>本例程使用的是PASCAL VOC2012数据集</span></p>
+    <ul>
+        <li><code>Pascal VOC2012</code><span> train/val 数据集下载地址：</span><a
+                class='url' href='http://host.robots.ox.ac.uk/pascal/VOC/voc2012/VOCtrainval_11-May-2012.tar'
+                target='_blank'>http://host.robots.ox.ac.uk/pascal/VOC/voc2012/VOCtrainval_11-May-2012.tar</a></li>
+        <li><span>如果不了解数据集或者想使用自己的数据集进行训练，请参考我的bilibili：</span><a class='url' href='https://b23.tv/F1kSCK'
+                                                                  target='_blank'>https://b23.tv/F1kSCK</a></li>
+    </ul>
+    <h3><a class="md-header-anchor" name="7-使用方法"></a><span>7 使用方法</span></h3>
+    <ul>
+        <li><span>确保提前准备好数据集</span></li>
+        <li><span>确保提前下载好对应预训练模型权重</span></li>
+        <li><span>若要使用单GPU训练或者使用CPU训练，直接使用train.py训练脚本</span></li>
+        <li><span>若要使用多GPU训练，使用 </span><code>python -m torch.distributed.launch --nproc_per_node=8 --use_env
+            train_multi_GPU.py</code><span> 指令, </span><code>nproc_per_node</code><span> 参数为使用GPU数量</span></li>
+    </ul>
+    <h3><a class="md-header-anchor" name="附录"></a><span>附录</span></h3><h4><a class="md-header-anchor"
+                                                                             name="附录a参考我的bilibili"></a><span>附录A：参考我的bilibili</span>
+    </h4>
+    <p><span>	</span><span>如果对 YOLOv3 SPP 网络原理不是很理解可参考 </span><a
+            href='https://www.bilibili.com/video/BV1yi4y1g7ro?p=3'><span>教程</span></a><span> 。</span></p><h4><a
+            class="md-header-anchor" name="附录byolov3-spp框架图"></a><span>附录B：YOLOv3 SPP框架图</span></h4>
+    <p><img alt="yolov3spp" referrerpolicy="no-referrer" src="./yolov3spp.png"><span> </span></p></div>
 </body>
 </html>

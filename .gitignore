@@ -1,4 +1,8 @@
 
-segmentation/yolov3_spp/train_utils/__pycache__/
+*__pycache__/
 
-segmentation/yolov3_spp/utils/__pycache__/
+*.idea/
+
+*__init__.py
+
+*.pt

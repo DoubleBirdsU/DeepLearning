@@ -1,12 +1,14 @@
 import os
-import torch
+
 import cv2
-import torch.onnx
+import numpy as np
 import onnx
 import onnxruntime
-import numpy as np
-import models
-from utils import img_utils
+import torch
+import torch.onnx
+
+import segmentation.yolov3_spp.models as models
+from segmentation.yolov3_spp.utils import img_utils
 
 device = torch.device("cpu")
 models.ONNX_EXPORT = True
@@ -26,7 +28,7 @@ def main():
     input_size = (img_size, img_size)  # [h, w]
 
     # create model
-    model = models.Darknet(cfg, input_size)
+    model = models.YOLOV3_SPP(cfg, input_size)
     # load model weights
     model.load_state_dict(torch.load(weights, map_location=device)["model"])
     model.to(device)
@@ -51,20 +53,20 @@ def main():
 
     save_path = "yolov3spp.onnx"
     # export the model
-    torch.onnx.export(model,                       # model being run
-                      x,                           # model input (or a tuple for multiple inputs)
-                      save_path,                   # where to save the model (can be a file or file-like object)
-                      export_params=True,          # store the trained parameter weights inside the model file
-                      opset_version=12,            # the ONNX version to export the model to
-                      do_constant_folding=True,    # whether to execute constant folding for optimization
-                      input_names=["images"],       # the model's input names
+    torch.onnx.export(model,  # model being run
+                      x,  # model input (or a tuple for multiple inputs)
+                      save_path,  # where to save the model (can be a file or file-like object)
+                      export_params=True,  # store the trained parameter weights inside the model file
+                      opset_version=12,  # the ONNX version to export the model to
+                      do_constant_folding=True,  # whether to execute constant folding for optimization
+                      input_names=["images"],  # the model's input names
                       # output_names=["classes", "boxes"],     # the model's output names
                       output_names=["prediction"],
                       dynamic_axes={"images": {0: "batch_size"},  # variable length axes
                                     "prediction": {0: "batch_size"}})
-                                    # "classes": {0: "batch_size"},
-                                    # "confidence": {0: "batch_size"},
-                                    # "boxes": {0: "batch_size"}})
+    # "classes": {0: "batch_size"},
+    # "confidence": {0: "batch_size"},
+    # "boxes": {0: "batch_size"}})
 
     # check onnx model
     onnx_model = onnx.load(save_path)

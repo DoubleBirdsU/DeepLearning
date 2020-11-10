@@ -3,9 +3,7 @@ import math
 import os
 import random
 import shutil
-import time
 from pathlib import Path
-from threading import Thread
 
 import cv2
 import numpy as np
@@ -18,7 +16,6 @@ from utils.utils import xyxy2xywh, xywh2xyxy
 
 help_url = 'https://github.com/ultralytics/yolov3/wiki/Train-Custom-Data'
 img_formats = ['.bmp', '.jpg', '.jpeg', '.png', '.tif', '.dng']
-
 
 # get orientation in exif tag
 # 找到图像exif信息中对应旋转信息的key值
@@ -617,7 +614,3 @@ def create_folder(path="./new_folder"):
     if os.path.exists(path):
         shutil.rmtree(path)  # dalete output folder
     os.makedirs(path)  # make new output folder
-
-
-
-

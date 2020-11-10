@@ -1,15 +1,17 @@
-import os
 import json
-import torch
+import os
+import time
+
 import cv2
 import numpy as np
-import time
+import torch
 from matplotlib import pyplot as plt
+
+from draw_box_utils import draw_box
+from models import YOLOV3_SPP
 from utils import img_utils
 from utils import torch_utils
 from utils import utils
-from models import Darknet
-from draw_box_utils import draw_box
 
 
 def main():
@@ -31,7 +33,7 @@ def main():
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    model = Darknet(cfg, img_size)
+    model = YOLOV3_SPP(cfg, img_size)
     model.load_state_dict(torch.load(weights, map_location=device)["model"])
     model.to(device)
 
@@ -79,6 +81,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-

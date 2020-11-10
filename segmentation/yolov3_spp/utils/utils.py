@@ -18,7 +18,7 @@ import torch.nn as nn
 import torchvision
 from tqdm import tqdm
 
-from . import torch_utils  # , google_utils
+from utils import torch_utils  # , google_utils
 
 # Set printoptions
 torch.set_printoptions(linewidth=320, precision=5, profile='long')

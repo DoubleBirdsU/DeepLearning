@@ -46,7 +46,7 @@ class Model(base_model):
             elif layer_def["type"] == "BatchNorm2d":
                 pass
             elif layer_def["type"] == "maxpool":
-                modules = MaxPool2D(kernel_size=layer_def["size"], stride=layer_def["stride"], padding='same')
+                modules = MaxPool2D(kernel_size=layer_def["size"], stride=layer_def["stride"], padding='tiny-same')
             elif layer_def["type"] == "upsample":
                 if ONNX_EXPORT:  # explicitly state size, avoid scale_factor
                     g = (yolo_index + 1) * 2 / 32  # gain
@@ -135,6 +135,11 @@ class Model(base_model):
         except Exception:
             print('WARNING: smart bias initialization failure.')
         return modules
+
+
+class Darknet(base_model):
+    def __init__(self):
+        super(Darknet, self).__init__()
 
 
 class YOLOLayer(base_model):

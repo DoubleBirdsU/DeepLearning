@@ -96,19 +96,18 @@ class MaxPool2D(nn.MaxPool2d):
 
         :param kernel_size: 内核尺寸
         :param stride: 步长
-        :param padding: 'valid' or 'same', 'valid': 不进行补充, 'same': 补足. default 'valid'
+        :param padding: 'valid', 'same', 'tiny-same'; 'valid': 不进行补充, 'same': 补足. default 'valid'
         :param padding_value: float
         """
         super(MaxPool2D, self).__init__(
             kernel_size=kernel_size,
             stride=stride,
-            padding=(kernel_size - 1) // 2 if padding == 'same' and padding_value == 0. else 0)
+            padding=(kernel_size - 1) // 2 if 'same' in padding and padding_value == 0. else 0)
         self.pad = None
-        if padding == 'same':  # Padding
-            if kernel_size == 2 and stride == 1:
-                self.pad = nn.ZeroPad2d((0, 1, 0, 1))  # l, r, t, b; yoloV3-tiny
-            elif padding_value != 0.:
-                self.pad = nn.ConstantPad2d((kernel_size - 1) // 2, padding_value)
+        if padding == 'tiny-same' and kernel_size == 2 and stride == 1:
+            self.pad = nn.ZeroPad2d((0, 1, 0, 1))  # l, r, t, b; yoloV3-tiny
+        elif padding_value != 0.:
+            self.pad = nn.ConstantPad2d((kernel_size - 1) // 2, padding_value)
 
     def forward(self, x):
         return super().forward(self.pad(x) if self.pad else x)

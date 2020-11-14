@@ -4,13 +4,13 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from utils.base_model import base_model
+from utils.base_model import Module
 from utils.layers import FeatureConcat, WeightedFeatureFusion, MaxPool2D
 
 ONNX_EXPORT = False
 
 
-class Model(base_model):
+class Model(Module):
     def __init__(self):
         super(Model, self).__init__()
 
@@ -137,12 +137,12 @@ class Model(base_model):
         return modules
 
 
-class Darknet(base_model):
+class Darknet(Module):
     def __init__(self):
         super(Darknet, self).__init__()
 
 
-class YOLOLayer(base_model):
+class YOLOLayer(Module):
     """对YOLO的输出进行处理
     """
 

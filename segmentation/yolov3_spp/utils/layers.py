@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utils.base_model import base_model
+from utils.base_model import base_module
 
 
 def make_divisible(v, divisor):
@@ -23,55 +23,59 @@ def make_divisible(v, divisor):
     return math.ceil(v / divisor) * divisor
 
 
-class Flatten(base_model):
+class Flatten(base_module):
     # Use after nn.AdaptiveAvgPool2d(1) to remove last 2 dimensions
     @staticmethod
-    def forward(x):
+    def __call__(x):
         return x.view(x.size(0), -1)
 
 
-class Concat(base_model):
+class Concat(base_module):
     # Concatenate a list of tensors along dimension
     def __init__(self, dimension=1):
         super(Concat, self).__init__()
         self.d = dimension
 
-    def forward(self, x):
+    def __call__(self, x):
         return torch.cat(x, self.d)
 
 
-class FeatureConcat(base_model):
+class FeatureConcat(base_module):
     def __init__(self, layers):
         super(FeatureConcat, self).__init__()
         self.layers = layers  # layer indices
         self.multiple = len(layers) > 1  # multiple layers flag
 
-    def forward(self, x, outputs):
+    def __call__(self, x, outputs):
         return torch.cat([outputs[i] for i in self.layers], 1) if self.multiple else outputs[self.layers[0]]
 
 
-class WeightedFeatureFusion(base_model):  # weighted sum of 2 or more layers https://arxiv.org/abs/1911.09070
+class WeightedFeatureFusion(base_module):  # weighted sum of 2 or more layers https://arxiv.org/abs/1911.09070
     """将多个特征矩阵的值进行融合
     """
 
     def __init__(self, layers, weight=False):
         super(WeightedFeatureFusion, self).__init__()
         self.layers = layers  # layer indices
-        self.weight = weight  # apply weights boolean
-        self.n = len(layers) + 1  # number of layers 融合的特征矩阵个数
+        self.bool_weight = weight  # apply weights boolean
+        self.num_layers = len(layers) + 1  # number of layers 融合的特征矩阵个数
         if weight:
-            self.w = nn.Parameter(torch.zeros(self.n), requires_grad=True)  # layer weights
+            self.weight = nn.Parameter(torch.zeros(self.num_layers), requires_grad=True)  # layer weights
 
-    def forward(self, x, outputs):
+    def __call__(self, x, outputs):
         # Weights
-        if self.weight:
-            w = torch.sigmoid(self.w) * (2 / self.n)  # sigmoid weights (0-1)
+        if self.bool_weight:
+            w = torch.sigmoid(self.weight) * (2 / self.num_layers)  # sigmoid weights (0-1)
             x = x * w[0]
+        else:
+            raise KeyError("backward doesn't have the param 'w'.")
 
         # Fusion
         nx = x.shape[1]  # input channels
-        for i in range(self.n - 1):
-            a = outputs[self.layers[i]] * w[i + 1] if self.weight else outputs[self.layers[i]]  # feature to add
+        for i in range(self.num_layers - 1):
+            a = outputs[self.layers[i]]
+            if self.bool_weight:
+                a *= w[i + 1]  # feature to add
             na = a.shape[1]  # feature channels
 
             # Adjust channels
@@ -84,6 +88,42 @@ class WeightedFeatureFusion(base_model):  # weighted sum of 2 or more layers htt
                 x = x + a[:, :nx]
 
         return x
+
+
+class Conv2D(nn.Conv2d):
+    def __init__(self, in_channels, out_channels, kernel_size=1, stride=1, padding='valid', groups=1, bias=False):
+        super(Conv2D, self).__init__(in_channels, out_channels, kernel_size, stride,
+                                     padding=kernel_size // 2 if padding == 'valid' else 0,
+                                     groups=groups, bias=bias)
+
+    def _forward_unimplemented(self, *input: Any) -> None:
+        return super(Conv2D, self)._forward_unimplemented(*input)
+
+
+class Activation(base_module):
+    def __init__(self, activation=None, inplace=True, **kwargs):
+        b"""Activation
+
+        Param:
+            activation: 'leaky', 'relu', 'sigmoid'
+
+        Returns:
+            None
+        """
+        super(Activation, self).__init__()
+        if isinstance(activation, nn.Module):
+            self.act = activation
+        elif isinstance(activation, str):
+            if activation == 'leaky':
+                negative_slope = kwargs['negative_slope'] if 'negative_slope' in kwargs else 1e-2
+                self.act = nn.LeakyReLU(negative_slope, inplace)
+            elif activation == 'relu':
+                self.act = nn.ReLU(inplace)
+            elif activation == 'sigmoid':
+                self.act = nn.Sigmoid()
+
+    def __call__(self, x):
+        return self.act(x)
 
 
 class MaxPool2D(nn.MaxPool2d):
@@ -109,14 +149,14 @@ class MaxPool2D(nn.MaxPool2d):
         elif padding_value != 0.:
             self.pad = nn.ConstantPad2d((kernel_size - 1) // 2, padding_value)
 
-    def forward(self, x):
+    def __call__(self, x):
         return super().forward(self.pad(x) if self.pad else x)
 
     def _forward_unimplemented(self, *input: Any) -> None:
         return super(MaxPool2D, self)._forward_unimplemented(*input)
 
 
-class MixConv2d(base_model):  # MixConv: Mixed Depthwise Convolutional Kernels https://arxiv.org/abs/1907.09595
+class MixConv2d(base_module):  # MixConv: Mixed Depthwise Convolutional Kernels https://arxiv.org/abs/1907.09595
     def __init__(self, in_ch, out_ch, kernel_size=(3, 5, 7), stride=1, dilation=1, bias=True, method='equal_params'):
         super(MixConv2d, self).__init__()
 
@@ -141,19 +181,27 @@ class MixConv2d(base_model):  # MixConv: Mixed Depthwise Convolutional Kernels h
                       dilation=dilation,
                       bias=bias) for g in range(groups)])
 
-    def forward(self, x):
+    def __call__(self, x):
         return torch.cat([m(x) for m in self.m], 1)
 
 
 # Activation functions below -------------------------------------------------------------------------------------------
 class SwishImplementation(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x):
+    def forward(x, **kwargs):
+        if 'ctx' in kwargs:
+            ctx = kwargs.pop('ctx')
+        else:
+            raise KeyError("forward doesn't have the param 'ctx'.")
         ctx.save_for_backward(x)
         return x * torch.sigmoid(x)
 
     @staticmethod
-    def backward(ctx, grad_output):
+    def backward(grad_output, **kwargs):
+        if 'ctx' in kwargs:
+            ctx = kwargs.pop('ctx')
+        else:
+            raise KeyError("forward doesn't have the param 'ctx'.")
         x = ctx.saved_tensors[0]
         sx = torch.sigmoid(x)  # sigmoid(ctx)
         return grad_output * (sx * (1 + x * (1 - sx)))
@@ -161,43 +209,46 @@ class SwishImplementation(torch.autograd.Function):
 
 class MishImplementation(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x, **kwargs):
+    def forward(x, **kwargs):
+        if 'ctx' in kwargs:
+            ctx = kwargs.pop('ctx')
+        else:
+            raise KeyError("forward doesn't have the param 'ctx'.")
         ctx.save_for_backward(x, **kwargs)
         return x.mul(torch.tanh(F.softplus(x)))  # x * tanh(ln(1 + exp(x)))
 
     @staticmethod
-    def backward(ctx, grad_output, **kwargs):
+    def backward(grad_output, **kwargs):
+        if 'ctx' in kwargs:
+            ctx = kwargs.pop('ctx')
+        else:
+            raise KeyError("backward doesn't have the param 'ctx'.")
         x = ctx.saved_tensors[0]
         sx = torch.sigmoid(x)
         fx = F.softplus(x).tanh()
         return grad_output * (fx + x * sx * (1 - fx * fx))
 
 
-class MemoryEfficientSwish(base_model):
-    @staticmethod
-    def forward(x):
+class MemoryEfficientSwish(base_module):
+    def __call__(self, x):
         return SwishImplementation.apply(x)
 
 
-class MemoryEfficientMish(base_model):
-    @staticmethod
-    def forward(x):
+class MemoryEfficientMish(base_module):
+    def __call__(self, x):
         return MishImplementation.apply(x)
 
 
-class Swish(base_model):
-    @staticmethod
-    def forward(x):
+class Swish(base_module):
+    def __call__(self, x):
         return x * torch.sigmoid(x)
 
 
-class HardSwish(base_model):  # https://arxiv.org/pdf/1905.02244.pdf
-    @staticmethod
-    def forward(x):
+class HardSwish(base_module):  # https://arxiv.org/pdf/1905.02244.pdf
+    def __call__(self, x):
         return x * F.hardtanh(x + 3, 0., 6., True) / 6.
 
 
-class Mish(base_model):  # https://github.com/digantamisra98/Mish
-    @staticmethod
-    def forward(x):
+class Mish(base_module):  # https://github.com/digantamisra98/Mish
+    def __call__(self, x):
         return x * F.softplus(x).tanh()

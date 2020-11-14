@@ -358,12 +358,12 @@ def smooth_BCE(eps=0.1):  # https://github.com/ultralytics/yolov3/issues/238#iss
     return 1.0 - 0.5 * eps, 0.5 * eps
 
 
-def compute_loss(p, targets, model):  # predictions, targets, model
-    device = p[0].device
+def compute_loss(pred, targets, model):  # predictions, targets, model
+    device = pred[0].device
     lcls = torch.zeros(1, device=device)  # Tensor(0)
     lbox = torch.zeros(1, device=device)  # Tensor(0)
     lobj = torch.zeros(1, device=device)  # Tensor(0)
-    tcls, tbox, indices, anchors = build_targets(p, targets, model)  # targets
+    tcls, tbox, indices, anchors = build_targets(pred, targets, model)  # targets
     h = model.hyp  # hyperparameters
     red = 'mean'  # Loss reduction (sum or mean)
 
@@ -381,7 +381,7 @@ def compute_loss(p, targets, model):  # predictions, targets, model
 
     # per output
     nt = 0  # targets
-    for i, pi in enumerate(p):  # layer index, layer predictions
+    for i, pi in enumerate(pred):  # layer index, layer predictions
         b, a, gj, gi = indices[i]  # image, anchor, gridy, gridx
         tobj = torch.zeros_like(pi[..., 0], device=device)  # target obj
 

@@ -101,7 +101,8 @@ class UpSampleBlk(Module):
 
 class AnchorBlk(Module):
     def __init__(self, in_ch, out_ch, upsample=False, scale_factor=2,
-                 kernels_size=(1, 3, 1, 3, 1), stride=None, in_ch_first=None):
+                 kernels_size=(1, 3, 1, 3, 1), stride=None,
+                 anchors_vec=None, in_ch_first=None):
         r"""AnchorBlk
 
         Args:
@@ -116,6 +117,7 @@ class AnchorBlk(Module):
             out, anchor
         """
         super(AnchorBlk, self).__init__()
+        self.anchor_vec = anchors_vec
         self.us_block = None
         if upsample:
             self.us_block = UpSampleBlk(in_ch, out_ch, scale_factor)
@@ -143,7 +145,7 @@ class AnchorBlk(Module):
 
 
 class YOLOBlk(Module):
-    def __init__(self, in_ch, out_ch, in_ch_first=2048):
+    def __init__(self, in_ch, out_ch, anchors, anchor_strides, in_ch_first=2048):
         """YOLOBlk
 
         Args:
@@ -154,11 +156,15 @@ class YOLOBlk(Module):
             None
         """
         super(YOLOBlk, self).__init__()
-        self.anchor1 = AnchorBlk(in_ch, out_ch, kernels_size=(1, 3, 1), in_ch_first=in_ch_first)
-        self.anchor2 = AnchorBlk(self.anchor1.filters, self.anchor1.filters // 2,
-                                 upsample=True, scale_factor=2, in_ch_first=self.anchor1.filters // 2 * 3)
-        self.anchor3 = AnchorBlk(self.anchor2.filters, self.anchor2.filters // 2,
-                                 upsample=True, scale_factor=2, in_ch_first=self.anchor2.filters // 2 * 3)
+        self.anchors = torch.Tensor(anchors)
+        self.anchor_strides = anchor_strides
+        self.anchors_vec = [self.anchors[i] / self.anchor_strides[i] for i in range(3)]
+        self.anchor1 = AnchorBlk(in_ch, out_ch, kernels_size=(1, 3, 1),
+                                 anchors_vec=self.anchors_vec[-1], in_ch_first=in_ch_first)
+        self.anchor2 = AnchorBlk(self.anchor1.filters, self.anchor1.filters // 2, upsample=True, scale_factor=2,
+                                 anchors_vec=self.anchors_vec[-2], in_ch_first=self.anchor1.filters // 2 * 3)
+        self.anchor3 = AnchorBlk(self.anchor2.filters, self.anchor2.filters // 2, upsample=True, scale_factor=2,
+                                 anchors_vec=self.anchors_vec[-3], in_ch_first=self.anchor2.filters // 2 * 3)
         self.collect_layers([self.anchor1, self.anchor2, self.anchor3])
 
     def __call__(self, inputs):

@@ -13,6 +13,139 @@ from train_utils.coco_utils import get_coco_api_from_dataset
 from utils.utils import compute_loss, non_max_suppression, scale_coords
 
 
+class Trainer(object):
+    def __init__(self, model, optimizer, loss_fun, callbacks=None):
+        """Trainer
+            模型训练器
+
+        Args:
+            model: Module
+            optimizer: 优化器, Adam, SGD,...
+            loss_fun: 损失函数
+            callbacks: 无参函数集
+
+        Returns:
+            None
+        """
+        self.model = model
+        self.optimizer = optimizer
+        self.loss_fun = loss_fun
+        self.callbacks = callbacks
+
+    def train_once(self, data_loader, device, epoch, print_freq,
+                   multi_scale=False, img_size=(512, 512),
+                   grid_min=8, grid_max=32, grid_size=32,
+                   random_size=64, warmup=False):
+        """train_once: 训练模型
+
+        Args:
+            data_loader:
+            device:
+            epoch:
+            print_freq:
+            multi_scale:
+            img_size:
+            grid_min:
+            grid_max:
+            grid_size:
+            random_size:
+            warmup:
+
+        Returns:
+            None
+        """
+        self.model.train()
+        metric_logger = utils.MetricLogger(delimiter="  ")
+        metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+        header = 'Epoch: [{}]'.format(epoch)
+
+        lr_scheduler = None
+        if epoch == 0 and warmup:  # 当训练第一轮（epoch=0）时，启用warmup训练方式，可理解为热身训练
+            warmup_factor = 1.0 / 1000
+            warmup_iters = min(1000, len(data_loader) - 1)
+
+            lr_scheduler = utils.warmup_lr_scheduler(self.optimizer, warmup_iters, warmup_factor)
+            random_size = 1
+
+        enable_amp = 'cuda' in device.type
+        scale = amp.GradScaler(enabled=enable_amp)
+
+        lr_now = 0.
+        loss_mean = torch.zeros(4).to(device)  # mean losses
+        batch_size = len(data_loader)  # number of batches
+        for i, (images, targets, paths, _, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+            # count_batch 统计从 epoch0 开始的所有 batch 数
+            count_batch = i + batch_size * epoch  # number integrated batches (since train start)
+            images = images.to(device).float() / 255.0  # uint8 to float32, 0 - 255 to 0.0 - 1.0
+            targets = targets.to(device)
+
+            # Multi-Scale
+            # 由于label已转为相对坐标，故缩放图片不影响label的值
+            # 每训练64张图片，就随机修改一次输入图片大小
+            if multi_scale:
+                images, img_size = self.random_size(images, img_size, count_batch % random_size == 0,
+                                                    grid_min, grid_max, grid_size)
+
+            # 混合精度训练上下文管理器，如果在CPU环境中不起任何作用
+            with amp.autocast(enabled=enable_amp):
+                pred = self.model(images)
+
+                # loss: compute_loss
+                loss_dict = self.loss_fun(pred, targets, self.model)
+
+                losses = sum(loss for loss in loss_dict.values())
+
+                # reduce losses over all GPUs for logging purpose
+                loss_dict_reduced = utils.reduce_dict(loss_dict)
+                losses_reduced = sum(loss for loss in loss_dict_reduced.values())
+                loss_items = torch.cat((loss_dict_reduced["box_loss"],
+                                        loss_dict_reduced["obj_loss"],
+                                        loss_dict_reduced["class_loss"],
+                                        losses_reduced)).detach()
+                loss_mean = (loss_mean * i + loss_items) / (i + 1)  # update mean losses
+
+                if not torch.isfinite(losses_reduced):
+                    print('WARNING: non-finite loss, ending training ', loss_dict_reduced)
+                    print("training image path: {}".format(",".join(paths)))
+                    sys.exit(1)
+
+                losses *= 1. / random_size  # scale loss
+
+            # backward
+            scale.scale(losses).backward()
+            # optimize
+            # 每训练64张图片更新一次权重
+            if count_batch % random_size == 0:
+                scale.step(self.optimizer)
+                scale.update()
+                self.optimizer.zero_grad()
+
+            metric_logger.update(loss=losses_reduced, **loss_dict_reduced)
+            lr_now = self.optimizer.param_groups[0]["lr"]
+            metric_logger.update(lr=lr_now)
+
+            if count_batch % random_size == 0 and lr_scheduler is not None:  # 第一轮使用warmup训练方式
+                self.optimizer.step()
+                lr_scheduler.step()
+
+        return loss_mean, lr_now
+
+    @staticmethod
+    def random_size(images, img_size, rand_size=False, grid_min=32, grid_max=64, grid_size=32,
+                    interpolate_mode='bilinear'):
+        if rand_size:  #  adjust img_size (67% - 150%) every 1 batch
+            # 在给定最大最小输入尺寸范围内随机选取一个size(size 为 grid_size 的整数倍)
+            img_size = random.randrange(grid_min, grid_max + 1) * grid_size
+        scale_factor = img_size / max(images.shape[2:])  # scale factor
+
+        # 如果图片最大边长不等于img_size, 则缩放图片，并将长和宽调整到32的整数倍
+        if scale_factor != 1:
+            # new shape (stretched to 32-multiple)
+            new_shape = [math.ceil(x * scale_factor / grid_size) * grid_size for x in images.shape[2:]]
+            images = F.interpolate(images, size=new_shape, mode=interpolate_mode, align_corners=False)
+        return images, img_size
+
+
 def train_one_epoch(model, optimizer, data_loader, device, epoch,
                     print_freq, accumulate, img_size,
                     grid_min, grid_max, gs,

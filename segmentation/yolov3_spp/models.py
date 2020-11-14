@@ -74,7 +74,11 @@ class YOLO_SPP(Model):
                                   in_ch_first=self.backbone.output_size)
 
         self.spp = blocks.SPPBlk()  # SPP
-        self.yolo = blocks.YOLOBlk(1024, 512)  # YOLOBlk
+        anchors = [[[10, 13], [16, 30], [33, 23]],
+                   [[30, 61], [62, 45], [59, 119]],
+                   [[116, 90], [156, 198], [373, 326]]]
+        anchor_strides = [8, 16, 32]
+        self.yolo = blocks.YOLOBlk(1024, 512, anchors, anchor_strides)  # YOLOBlk
 
         self.collect_layers([self.backbone, self.fcb, self.spp, self.yolo])
 

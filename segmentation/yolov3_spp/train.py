@@ -4,18 +4,21 @@ import math
 import os
 
 import torch
+import torch.nn as nn
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
 import yaml
 from torch.utils.tensorboard import SummaryWriter
 
-from models import YOLOV3_SPP
+from models import YOLOV3_SPP, YOLO_SPP
 from train_utils import train_eval_utils as train_util
 from train_utils.coco_utils import get_coco_api_from_dataset
+from train_utils.train_eval_utils import Trainer
+from utils.blocks import YOLOBlk
 from utils.datasets import LoadImageAndLabels
 from utils.model import YOLOLayer
 from utils.parse_config import parse_data_cfg
-from utils.utils import check_file
+from utils.utils import check_file, compute_loss
 
 
 def train(hyp):
@@ -65,31 +68,32 @@ def train(hyp):
         os.remove(f)
 
     # Initialize model
-    model = YOLOV3_SPP(cfg).to(device)
+    net = YOLOV3_SPP(cfg).to(device)
+    model = YOLO_SPP().to(device)
 
     # 是否冻结权重，只训练predictor的权重
-    if opt.freeze_layers:
-        # 索引减一对应的是predictor的索引，YOLOLayer并不是predictor
-        output_layer_indices = [idx - 1 for idx, module in enumerate(model.module_list) if
-                                isinstance(module, YOLOLayer)]
-        # 冻结除predictor和YOLOLayer外的所有层
-        freeze_layer_indeces = [x for x in range(len(model.module_list)) if
-                                (x not in output_layer_indices) and
-                                (x - 1 not in output_layer_indices)]
-        # Freeze non-output layers
-        # 总共训练3x2=6个parameters
-        for idx in freeze_layer_indeces:
-            for parameter in model.module_list[idx].parameters():
-                parameter.requires_grad_(False)
-    else:
-        # 如果freeze_layer为False，默认仅训练除darknet53之后的部分
-        # 若要训练全部权重，删除以下代码
-        darknet_end_layer = 74  # only yolov3spp cfg
-        # Freeze darknet53 layers
-        # 总共训练21x3+3x2=69个parameters
-        for idx in range(darknet_end_layer + 1):  # [0, 74]
-            for parameter in model.module_list[idx].parameters():
-                parameter.requires_grad_(False)
+    # if opt.freeze_layers:
+    #     # 索引减一对应的是predictor的索引，YOLOLayer并不是predictor
+    #     output_layer_indices = [idx - 1 for idx, module in enumerate(model.module_list) if
+    #                             isinstance(module, YOLOBlk)]
+    #     # 冻结除predictor和YOLOLayer外的所有层
+    #     freeze_layer_indeces = [x for x in range(len(model.module_list)) if
+    #                             (x not in output_layer_indices) and
+    #                             (x - 1 not in output_layer_indices)]
+    #     # Freeze non-output layers
+    #     # 总共训练3x2=6个parameters
+    #     for idx in freeze_layer_indeces:
+    #         for parameter in model.module_list[idx].parameters():
+    #             parameter.requires_grad_(False)
+    # else:
+    #     # 如果freeze_layer为False，默认仅训练除darknet53之后的部分
+    #     # 若要训练全部权重，删除以下代码
+    #     darknet_end_layer = 74  # only yolov3spp cfg
+    #     # Freeze darknet53 layers
+    #     # 总共训练21x3+3x2=69个parameters
+    #     for idx in range(darknet_end_layer + 1):  # [0, 74]
+    #         for parameter in model.module_list[idx].parameters():
+    #             parameter.requires_grad_(False)
 
     # optimizer
     pg = [p for p in model.parameters() if p.requires_grad]
@@ -121,11 +125,12 @@ def train(hyp):
                 file.write(ckpt["training_results"])  # write results.txt
 
         # epochs
-        start_epoch = ckpt["epoch"] + 1
-        if epochs < start_epoch:
-            print('%s has been trained for %g epochs. Fine-tuning for %g additional epochs.' %
-                  (opt.weights, ckpt['epoch'], epochs))
-            epochs += ckpt['epoch']  # finetune additional epochs
+        if ckpt['epoch']:
+            start_epoch = ckpt["epoch"] + 1
+            if epochs < start_epoch:
+                print('%s has been trained for %g epochs. Fine-tuning for %g additional epochs.' %
+                      (opt.weights, ckpt['epoch'], epochs))
+                epochs += ckpt['epoch']  # finetune additional epochs
 
         del ckpt
 
@@ -177,20 +182,29 @@ def train(hyp):
     # caching val_data when you have plenty of memory(RAM)
     # coco = None
     coco = get_coco_api_from_dataset(val_dataset)
+    trainer = Trainer(model, optimizer, compute_loss)
 
     print("starting traning for %g epochs..." % epochs)
     print('Using %g dataloader workers' % nw)
     for epoch in range(start_epoch, epochs):
-        mloss, lr = train_util.train_one_epoch(model, optimizer, train_dataloader,
-                                               device, epoch,
-                                               accumulate=accumulate,  # 迭代多少batch才训练完64张图片
-                                               img_size=imgsz_train,  # 输入图像的大小
-                                               multi_scale=multi_scale,
-                                               grid_min=grid_min,  # grid的最小尺寸
-                                               grid_max=grid_max,  # grid的最大尺寸
-                                               gs=gs,  # grid step: 32
-                                               print_freq=50,  # 每训练多少个step打印一次信息
-                                               warmup=True)
+        mloss, lr = trainer.train_once(train_dataloader, device, epoch,
+                                       print_freq=50,  # 打印信息的 step
+                                       multi_scale=multi_scale,  #
+                                       img_size=imgsz_train,  # 输入图像的大小
+                                       grid_min=grid_min,  # grid 的最小尺寸
+                                       grid_max=grid_max,  # grid 的最大尺寸
+                                       grid_size=gs,  # grid 的尺寸
+                                       warmup=True)
+        # mloss, lr = train_util.train_one_epoch(model, optimizer, train_dataloader,
+        #                                        device, epoch,
+        #                                        accumulate=accumulate,  # 迭代多少batch才训练完64张图片
+        #                                        img_size=imgsz_train,  # 输入图像的大小
+        #                                        multi_scale=multi_scale,
+        #                                        grid_min=grid_min,  # grid的最小尺寸
+        #                                        grid_max=grid_max,  # grid的最大尺寸
+        #                                        gs=gs,  # grid step: 32
+        #                                        print_freq=50,  # 每训练多少个step打印一次信息
+        #                                        warmup=True)
         # update scheduler
         scheduler.step()
 
@@ -258,7 +272,7 @@ if __name__ == '__main__':
     parser.add_argument('--savebest', type=bool, default=False, help='only save best checkpoint')
     parser.add_argument('--notest', action='store_true', help='only test final epoch')
     parser.add_argument('--cache-images', action='store_true', help='cache images for faster training')
-    parser.add_argument('--weights', type=str, default='weights/yolov3-spp-ultralytics-512.pt',
+    parser.add_argument('--weights', type=str, default='weights/yolov3spp.pt',
                         help='initial weights path')
     parser.add_argument('--name', default='', help='renames results.txt to results_name.txt if supplied')
     parser.add_argument('--device', default='cuda:0', help='device id (i.e. 0 or 0,1 or cpu)')

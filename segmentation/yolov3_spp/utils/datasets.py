@@ -12,7 +12,7 @@ from PIL import Image, ExifTags
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from utils.utils import xyxy2xywh, xywh2xyxy
+from utils.utils import ltrb2xywh, xywh2ltrb
 
 help_url = 'https://github.com/ultralytics/yolov3/wiki/Train-Custom-Data'
 img_formats = ['.bmp', '.jpg', '.jpeg', '.png', '.tif', '.dng']
@@ -215,7 +215,7 @@ class LoadImageAndLabels(Dataset):  # for training/testing
                         # 在宽和高方向添加padding
                         b[2:] = b[2:] * 1.3 + 30  # pad
                         # 将坐标格式从 x,y,w,h -> xmin,ymin,xmax,ymax
-                        b = xywh2xyxy(b.reshape(-1, 4)).revel().astype(np.int)
+                        b = xywh2ltrb(b.reshape(-1, 4)).revel().astype(np.int)
 
                         # 裁剪bbox坐标到图片内
                         b[[0, 2]] = np.clip[b[[0, 2]], 0, w]
@@ -302,7 +302,7 @@ class LoadImageAndLabels(Dataset):  # for training/testing
         nL = len(labels)  # number of labels
         if nL:
             # convert xyxy to xywh
-            labels[:, 1:5] = xyxy2xywh(labels[:, 1:5])
+            labels[:, 1:5] = ltrb2xywh(labels[:, 1:5])
 
             # Normalize coordinates 0-1
             labels[:, [2, 4]] /= img.shape[0]  # height

@@ -16,6 +16,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torchvision
+from torch import Tensor
 from tqdm import tqdm
 
 from utils import torch_utils  # , google_utils
@@ -100,24 +101,38 @@ def coco80_to_coco91_class():  # converts 80-index (val2014) to 91-index (paper)
     return x
 
 
-def xyxy2xywh(x):
-    # Convert nx4 boxes from [x1, y1, x2, y2] to [x, y, w, h] where xy1=top-left, xy2=bottom-right
-    y = torch.zeros_like(x) if isinstance(x, torch.Tensor) else np.zeros_like(x)
-    y[:, 0] = (x[:, 0] + x[:, 2]) / 2  # x center
-    y[:, 1] = (x[:, 1] + x[:, 3]) / 2  # y center
-    y[:, 2] = x[:, 2] - x[:, 0]  # width
-    y[:, 3] = x[:, 3] - x[:, 1]  # height
-    return y
+def ltrb2xywh(ltrb: Tensor, ltcs=True, delta=1e-16):
+    r"""ltrb2xywh
+        left-top Coordinate System
+    Args:
+        ltrb: [left, top, right, bottom], e.g. left <= right, top < bottom
+        ltcs: bool, left <= right, top <= bottom, default True.
+        delta: precision or disturbance, default 1e-16
+
+    Returns:
+        xywh: [center_x, center_y, weight, high]
+    """
+    if ltcs and (ltrb[..., :2] - ltrb[..., 2:] > delta).sum():
+        raise ValueError(f"'ltrb' is not left-top Coordinate System.")
+    xywh = torch.zeros_like(ltrb) if isinstance(ltrb, torch.Tensor) else np.zeros_like(ltrb)
+    xywh[..., :2] = (ltrb[..., 2:] + ltrb[..., :2]) / 2  # center [x, y]
+    xywh[..., 2:] = ltrb[..., 2:] - ltrb[..., :2]  # [width, height]
+    return xywh
 
 
-def xywh2xyxy(x):
-    # Convert nx4 boxes from [x, y, w, h] to [x1, y1, x2, y2] where xy1=top-left, xy2=bottom-right
-    y = torch.zeros_like(x) if isinstance(x, torch.Tensor) else np.zeros_like(x)
-    y[:, 0] = x[:, 0] - x[:, 2] / 2  # top left x
-    y[:, 1] = x[:, 1] - x[:, 3] / 2  # top left y
-    y[:, 2] = x[:, 0] + x[:, 2] / 2  # bottom right x
-    y[:, 3] = x[:, 1] + x[:, 3] / 2  # bottom right y
-    return y
+def xywh2ltrb(xywh):
+    r"""xywh2ltrb
+        left-top Coordinate System
+    Args:
+        xywh: [center_x, center_y, weight, high]
+
+    Returns:
+        ltrb: [left, top, right, bottom]
+    """
+    ltrb = torch.zeros_like(xywh) if isinstance(xywh, torch.Tensor) else np.zeros_like(xywh)
+    ltrb[..., :2] = xywh[..., :2] - xywh[..., 2:] / 2  # left top
+    ltrb[..., 2:] = xywh[..., :2] + xywh[..., 2:] / 2  # right bottom
+    return ltrb
 
 
 def scale_coords(img1_shape, coords, img0_shape, ratio_pad=None):
@@ -244,48 +259,120 @@ def compute_ap(recall, precision):
     return ap
 
 
-def bbox_iou(box1, box2, x1y1x2y2=True, GIoU=False, DIoU=False, CIoU=False):
-    # Returns the IoU of box1 to box2. box1 is 4, box2 is nx4
-    box2 = box2.t()
+def bbox_iou(box1: Tensor, box2: Tensor, ltrb=True, iou_type='IoU', delta=1e-16):
+    """bbox_iou
+        left-top Coordinate System.
 
+        xywh = [center_x, center_y, weight, height]
+
+        ltrb = [left, top, right, bottom], where left <= right, top <= bottom.
+
+    Args:
+        box1: box1 position description, xywh or ltrb.
+        box2: box2 position description, as above.
+        ltrb: bool, box position data is type of 'ltrb', default True.
+        iou_type: 'IoU', 'GIoU', 'DIoU', 'CIoU', it isn't sensitive to upper or lower, default 'IoU'.
+        delta: precision or disturbance, default 1e-16
+
+    Returns:
+        iou
+    """
     # Get the coordinates of bounding boxes
-    if x1y1x2y2:  # x1, y1, x2, y2 = box1
-        b1_x1, b1_y1, b1_x2, b1_y2 = box1[0], box1[1], box1[2], box1[3]
-        b2_x1, b2_y1, b2_x2, b2_y2 = box2[0], box2[1], box2[2], box2[3]
-    else:  # transform from xywh to xyxy
-        b1_x1, b1_x2 = box1[0] - box1[2] / 2, box1[0] + box1[2] / 2
-        b1_y1, b1_y2 = box1[1] - box1[3] / 2, box1[1] + box1[3] / 2
-        b2_x1, b2_x2 = box2[0] - box2[2] / 2, box2[0] + box2[2] / 2
-        b2_y1, b2_y2 = box2[1] - box2[3] / 2, box2[1] + box2[3] / 2
+    lt1, rb1 = init_boxes(box1 if ltrb else xywh2ltrb(box1))  # lt point, rb point
+    lt2, rb2 = init_boxes(box2 if ltrb else xywh2ltrb(box2))  # lt point, rb point
+    wh1, wh2 = rb1 - lt1, rb2 - lt2  # weight, height
 
     # Intersection area
-    inter = (torch.min(b1_x2, b2_x2) - torch.max(b1_x1, b2_x1)).clamp(0) * \
-            (torch.min(b1_y2, b2_y2) - torch.max(b1_y1, b2_y1)).clamp(0)
+    inter = torch.prod((torch.min(rb1, rb2) - torch.max(lt1, lt2)).clamp(0))
 
-    # Union Area
-    w1, h1 = b1_x2 - b1_x1, b1_y2 - b1_y1
-    w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1
-    union = (w1 * h1 + 1e-16) + w2 * h2 - inter
+    # Union Area, union = (s1 + s2 - inter) + delta, delta = 1e-16
+    union = torch.prod(wh1) + torch.prod(wh2) - inter + delta
 
     iou = inter / union  # iou
-    if GIoU or DIoU or CIoU:
-        cw = torch.max(b1_x2, b2_x2) - torch.min(b1_x1, b2_x1)  # convex (smallest enclosing box) width
-        ch = torch.max(b1_y2, b2_y2) - torch.min(b1_y1, b2_y1)  # convex height
-        if GIoU:  # Generalized IoU https://arxiv.org/pdf/1902.09630.pdf
-            c_area = cw * ch + 1e-16  # convex area
-            return iou - (c_area - union) / c_area  # GIoU
-        if DIoU or CIoU:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
+    iou_type = iou_type.upper()  # upper
+    if iou_type != 'IOU':
+        # convex width, height (smallest enclosing box)
+        convex_wh = torch.max(rb1, rb2) - torch.min(lt1, lt2)
+        if iou_type == 'GIOU':  # Generalized IoU https://arxiv.org/pdf/1902.09630.pdf
+            convex_area = torch.prod(convex_wh) + delta  # convex area
+            iou -= (convex_area - union) / convex_area  # GIoU
+        elif iou_type in ['DIOU', 'CIOU']:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
             # convex diagonal squared
-            c2 = cw ** 2 + ch ** 2 + 1e-16
-            # centerpoint distance squared
-            rho2 = ((b2_x1 + b2_x2) - (b1_x1 + b1_x2)) ** 2 / 4 + ((b2_y1 + b2_y2) - (b1_y1 + b1_y2)) ** 2 / 4
-            if DIoU:
-                return iou - rho2 / c2  # DIoU
-            elif CIoU:  # https://github.com/Zzh-tju/DIoU-SSD-pytorch/blob/master/utils/box/box_utils.py#L47
-                v = (4 / math.pi ** 2) * torch.pow(torch.atan(w2 / h2) - torch.atan(w1 / h1), 2)
+            convex = (convex_wh ** 2).sum() + delta
+            # center point distance squared
+            rho = (((lt2 + rb2) - (lt1 + rb1)) ** 2 / 4).sum()
+            if iou_type == 'DIOU':
+                iou -= rho / convex  # DIoU
+            elif iou_type == 'CIOU':
+                v = (4 / math.pi ** 2) * torch.pow(torch.atan(wh2[..., 0] / wh2[..., 1]) -
+                                                   torch.atan(wh1[..., 0] / wh1[..., 1]), 2)
                 with torch.no_grad():
                     alpha = v / (1 - iou + v)
-                return iou - (rho2 / c2 + v * alpha)  # CIoU
+                iou -= (rho / convex + v * alpha)  # CIoU
+
+    return iou
+
+
+def init_boxes(box):
+    return [box[..., :2], box[..., 2:]]
+
+
+def bbox_iou_v2(box1: Tensor, box2: Tensor, ltrb=True, iou_type='IoU', delta=1e-16):
+    """bbox_iou
+        xywh = [center_x, center_y, weight, height]
+
+        ltrb = [left, top, right, bottom]
+
+    Args:
+        box1: box1 position description, xywh or ltrb.
+        box2: box2 position description, as above.
+        ltrb: bool, box position data is type of 'ltrb', default True.
+        iou_type: 'IoU', 'GIoU', 'DIoU', 'CIoU', it isn't sensitive to upper or lower, default 'IoU'.
+        delta: precision or disturbance, default 1e-16
+
+    Returns:
+        iou
+    """
+    # Get the coordinates of bounding boxes
+    ltrb_1 = box1.clone() if ltrb else xywh2ltrb(box1)
+    ltrb_2 = box2.clone() if ltrb else xywh2ltrb(box2)
+    wh_1 = ltrb_1[..., 2:] - ltrb_1[..., :2]
+    wh_2 = ltrb_2[..., 2:] - ltrb_2[..., :2]
+
+    # Intersection area
+    # inter = ((min(r1, r2) - max(l1, l2)).clamp(0) *
+    #          (min(b1, b2) - max(t1, t2)).clamp(0))
+    inter = torch.prod((ltrb_1[..., 2:].minimum(ltrb_2[..., 2:]) -
+                        ltrb_1[..., :2].maximum(ltrb_2[..., :2])).clamp(0))
+
+    # Union Area, union = (s1 + s2 - inter) + delta, delta = 1e-16
+    union = torch.prod(wh_1) + torch.prod(wh_2) - inter + delta
+
+    iou = inter / union  # iou
+    iou_type = iou_type.upper()  # upper
+    if iou_type != 'IOU':
+        # convex width, height (smallest enclosing box)
+        # convex_wh = [max(r1, r2) - min(l1, l2),
+        #              max(b1, b2) - min(t1, t2)]
+        convex_wh = ltrb_1[..., 2:].maximum(ltrb_2[..., 2:]) - ltrb_1[..., :2].minimum(ltrb_2[..., :2])
+        if iou_type == 'GIOU':  # Generalized IoU https://arxiv.org/pdf/1902.09630.pdf
+            convex_area = torch.prod(convex_wh) + delta  # convex area
+            iou -= (convex_area - union) / convex_area  # GIoU
+        elif iou_type in ['DIOU', 'CIOU']:  # Distance or Complete IoU https://arxiv.org/abs/1911.08287v1
+            # convex diagonal squared
+            convex = (convex_wh ** 2).sum() + delta
+            # center point distance squared
+            # rho = ((l2 + r2) - (l1 + r1)) ** 2 / 4 +
+            #       ((t2 + b2) - (t1 + b1)) ** 2 / 4
+            rho = (((ltrb_2[..., :2] + ltrb_2[..., 2:]) - (ltrb_1[..., :2] + ltrb_1[..., 2:])) ** 2 / 4).sum()
+            if iou_type == 'DIOU':
+                iou -= rho / convex  # DIoU
+            elif iou_type == 'CIOU':
+                v = (4 / math.pi ** 2) * torch.pow(torch.atan(wh_2[..., 0] / wh_2[..., 1]) -
+                                                   torch.atan(wh_1[..., 0] / wh_1[..., 1]), 2)
+                with torch.no_grad():
+                    alpha = v / (1 - iou + v)
+                iou -= (rho / convex + v * alpha)  # CIoU
 
     return iou
 
@@ -358,127 +445,154 @@ def smooth_BCE(eps=0.1):  # https://github.com/ultralytics/yolov3/issues/238#iss
     return 1.0 - 0.5 * eps, 0.5 * eps
 
 
-def compute_loss(pred, targets, model):  # predictions, targets, model
-    device = pred[0].device
-    lcls = torch.zeros(1, device=device)  # Tensor(0)
-    lbox = torch.zeros(1, device=device)  # Tensor(0)
-    lobj = torch.zeros(1, device=device)  # Tensor(0)
-    tcls, tbox, indices, anchors = build_targets(pred, targets, model)  # targets
-    h = model.hyp  # hyperparameters
-    red = 'mean'  # Loss reduction (sum or mean)
+def compute_loss(preds, targets, model):  # predictions, targets, model
+    device = preds[0].device
+    loss_cls = torch.zeros(1, device=device)  # Tensor(0)
+    loss_box = torch.zeros(1, device=device)  # Tensor(0)
+    loss_obj = torch.zeros(1, device=device)  # Tensor(0)
+    target_cls, target_box, indices, anchors = build_targets(preds, targets, model)  # targets
+    hyp = model.hyp  # hyperparameters
+    reduction = 'mean'  # Loss reduction (sum or mean)
 
     # Define criteria
-    BCEcls = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([h['cls_pw']], device=device), reduction=red)
-    BCEobj = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([h['obj_pw']], device=device), reduction=red)
+    BCE_cls = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([hyp['cls_pw']], device=device), reduction=reduction)
+    BCE_obj = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([hyp['obj_pw']], device=device), reduction=reduction)
 
     # class label smoothing https://arxiv.org/pdf/1902.04103.pdf eqn 3
-    cp, cn = smooth_BCE(eps=0.0)
+    label_pos, label_neg = smooth_BCE(eps=0.0)
 
     # focal loss
-    g = h['fl_gamma']  # focal loss gamma
-    if g > 0:
-        BCEcls, BCEobj = FocalLoss(BCEcls, g), FocalLoss(BCEobj, g)
+    fl_gamma = hyp['fl_gamma']  # focal loss gamma
+    if fl_gamma > 0:
+        BCE_cls, BCE_obj = FocalLoss(BCE_cls, fl_gamma), FocalLoss(BCE_obj, fl_gamma)
 
     # per output
-    nt = 0  # targets
-    for i, pi in enumerate(pred):  # layer index, layer predictions
-        b, a, gj, gi = indices[i]  # image, anchor, gridy, gridx
-        tobj = torch.zeros_like(pi[..., 0], device=device)  # target obj
+    count_targets = 0  # targets
+    for i, pred in enumerate(preds):  # layer index, layer predictions
+        img, anchor, grid_y, grid_x = indices[i]  # image, anchor, gridy, gridx
+        target_obj = torch.zeros_like(pred[..., 0], device=device)  # target obj
 
-        nb = b.shape[0]  # number of targets
-        if nb:
-            nt += nb  # cumulative targets
+        num_target = img.shape[0]  # number of targets
+        if num_target:
+            count_targets += num_target  # cumulative targets
             # 对应匹配到正样本的预测信息
-            ps = pi[b, a, gj, gi]  # prediction subset corresponding to targets
+            pred_sub = pred[img, anchor, grid_y, grid_x]  # prediction subset corresponding to targets
 
             # GIoU
-            pxy = ps[:, :2].sigmoid()
-            pwh = ps[:, 2:4].exp().clamp(max=1E3) * anchors[i]
-            pbox = torch.cat((pxy, pwh), 1)  # predicted box
-            giou = bbox_iou(pbox.t(), tbox[i], x1y1x2y2=False, GIoU=True)  # giou(prediction, target)
-            lbox += (1.0 - giou).mean()  # giou loss
+            pred_xy = pred_sub[:, :2].sigmoid()
+            pred_wh = pred_sub[:, 2:4].exp().clamp(max=1E3) * anchors[i]
+            pred_box = torch.cat((pred_xy, pred_wh), 1)  # predicted box
+            giou = bbox_iou(pred_box.t(), target_box[i], ltrb=False, iou_type='GIoU')  # giou(prediction, target)
+            loss_box += (1.0 - giou).mean()  # giou loss
 
             # Obj
-            tobj[b, a, gj, gi] = (1.0 - model.gr) + model.gr * giou.detach().clamp(0).type(tobj.dtype)  # giou ratio
+            target_obj[img, anchor, grid_y, grid_x] = \
+                (1.0 - model.gr) + model.gr * giou.detach().clamp(0).type(target_obj.dtype)  # giou ratio
 
             # Class
             if model.nc > 1:  # cls loss (only if multiple classes)
-                t = torch.full_like(ps[:, 5:], cn, device=device)  # targets
-                t[range(nb), tcls[i]] = cp
-                lcls += BCEcls(ps[:, 5:], t)  # BCE
+                pred_tar = torch.full_like(pred_sub[:, 5:], label_neg, device=device)  # targets
+                pred_tar[range(num_target), target_cls[i]] = label_pos
+                loss_cls += BCE_cls(pred_sub[:, 5:], pred_tar)  # BCE
 
-        lobj += BCEobj(pi[..., 4], tobj)  # obj loss
+        loss_obj += BCE_obj(pred[..., 4], target_obj)  # obj loss
 
     # 乘上每种损失的对应权重
-    lbox *= h['giou']
-    lobj *= h['obj']
-    lcls *= h['cls']
+    loss_box *= hyp['giou']
+    loss_obj *= hyp['obj']
+    loss_cls *= hyp['cls']
 
-    # loss = lbox + lobj + lcls
-    return {"box_loss": lbox, "obj_loss": lobj, "class_loss": lcls}
+    # loss = loss_box + loss_obj + loss_cls
+    return {"box_loss": loss_box, "obj_loss": loss_obj, "class_loss": loss_cls}
 
 
-def build_targets(p, targets, model):
-    # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
-    nt = targets.shape[0]
-    tcls, tbox, indices, anch = [], [], [], []
-    gain = torch.ones(6, device=targets.device)  # normalized to gridspace gain
-    off = torch.tensor([[1, 0], [0, 1], [-1, 0], [0, -1]], device=targets.device).float()  # overlap offsets
-
-    style = None
+def build_targets(pred, targets, model):
+    rect_style = 'valid'
     multi_gpu = type(model) in (nn.parallel.DataParallel, nn.parallel.DistributedDataParallel)
+    # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
+    num_targets = targets.shape[0]
+    gain = torch.ones(6, device=targets.device)  # normalized to gridspace gain
+    lap_off = torch.tensor([[1, 0], [0, 1], [-1, 0], [0, -1]], device=targets.device).float()  # overlap offsets
+
+    # target_cls, target_box, indices, anchors
+    target_cls, target_box, indices, anchors = [], [], [], []
     for i, j in enumerate(model.yolo_layers):  # [89, 101, 113]
         # 获取该yolo predictor对应的anchors
         anchors = model.module.module_list[j].anchor_vec if multi_gpu else model.module_list[j].anchor_vec
-        gain[2:] = torch.tensor(p[i].shape)[[3, 2, 3, 2]]  # xyxy gain
-        na = anchors.shape[0]  # number of anchors
-        # [3] -> [3, 1] -> [3, nt]
-        at = torch.arange(na).view(na, 1).repeat(1, nt)  # anchor tensor, same as .repeat_interleave(nt)
+        gain[2:] = torch.tensor(pred[i].shape)[[3, 2, 3, 2]]  # xyxy gain
 
         # Match targets to anchors
-        a, t, offsets = [], targets * gain, 0
-        if nt:  # 如果存在target的话
-            j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n) = wh_iou(anchors(3,2), gwh(n,2))
-            # t.repeat(na, 1, 1): [nt, 6] -> [3, nt, 6]
-            # 获取iou大于阈值的anchor与target对应信息
-            a, t = at[j], t.repeat(na, 1, 1)[j]  # filter
-
-            # overlaps
-            gxy = t[:, 2:4]  # grid xy
-            z = torch.zeros_like(gxy)
-            if style == 'rect2':
-                g = 0.2  # offset
-                j, k = ((gxy % 1. < g) & (gxy > 1.)).T
-                a, t = torch.cat((a, a[j], a[k]), 0), torch.cat((t, t[j], t[k]), 0)
-                offsets = torch.cat((z, z[j] + off[0], z[k] + off[1]), 0) * g
-
-            elif style == 'rect4':
-                g = 0.5  # offset
-                j, k = ((gxy % 1. < g) & (gxy > 1.)).T
-                l, m = ((gxy % 1. > (1 - g)) & (gxy < (gain[[2, 3]] - 1.))).T
-                a, t = torch.cat((a, a[j], a[k], a[l], a[m]), 0), torch.cat((t, t[j], t[k], t[l], t[m]), 0)
-                offsets = torch.cat((z, z[j] + off[0], z[k] + off[1], z[l] + off[2], z[m] + off[3]), 0) * g
+        match_anchors, targets_gain, offsets = [], targets * gain, 0
+        if num_targets:  # 如果存在target的话
+            match_anchors, targets_gain, offsets = match2anchors(anchors, targets_gain, num_targets,
+                                                                 rect_style, lap_off, gain, model)
 
         # Define
-        # long等于to(torch.int64), 数值向下取整
-        b, c = t[:, :2].long().T  # image, class
-        gxy = t[:, 2:4]  # grid xy
-        gwh = t[:, 4:6]  # grid wh
-        gij = (gxy - offsets).long()  # 匹配targets所在的grid cell左上角坐标
-        gi, gj = gij.T  # grid xy indices
+        indic, tar_box, anchor, cls = deal_targets_gain(targets_gain, offsets, anchors, match_anchors)
 
         # Append
-        indices.append((b, a, gj, gi))  # image, anchor, grid indices(x, y)
-        tbox.append(torch.cat((gxy - gij, gwh), 1))  # gt box相对anchor的x,y偏移量以及w,h
-        anch.append(anchors[a])  # anchors
-        tcls.append(c)  # class
-        if c.shape[0]:  # if any targets
+        indices.append(indic)  # image, anchor, grid indices(x, y)
+        target_box.append(tar_box)  # gt box相对anchor的x,y偏移量以及w,h
+        anchors.append(anchor)  # anchors
+        target_cls.append(cls)  # class
+        if cls.shape[0]:  # if any targets
             # 目标的标签数值不能大于给定的目标类别数
-            assert c.max() < model.nc, 'Model accepts %g classes labeled from 0-%g, however you labelled a class %g. ' \
-                                       'See https://github.com/ultralytics/yolov3/wiki/Train-Custom-Data' % (
-                                           model.nc, model.nc - 1, c.max())
+            assert cls.max() < model.nc, 'Model accepts %g classes labeled from 0-%g, ' \
+                                         'however you labelled match_anchors class %g. ' \
+                                         'See https://github.com/ultralytics/yolov3/wiki/Train-Custom-Data' % (
+                                         model.nc, model.nc - 1, cls.max())
 
-    return tcls, tbox, indices, anch
+    return target_cls, target_box, indices, anchors
+
+
+def match2anchors(anchors, targets_gain, num_targets, rect_style, lap_off, gain, model):
+    num_anchors = anchors.shape[0]  # number of anchors
+    # [3] -> [3, 1] -> [3, num_targets]
+    # anchor tensor, same as .repeat_interleave(num_targets)
+    anchor_tensor = torch.arange(num_anchors).view(num_anchors, 1).repeat(1, num_targets)
+    # iou(3,n) = wh_iou(anchors(3,2), grid_wh(n,2))
+    j = wh_iou(anchors, targets_gain[:, 4:6]) > model.hyp['iou_t']
+    # targets_gain.repeat(num_anchors, 1, 1): [num_targets, 6] -> [3, num_targets, 6]
+    # 获取iou大于阈值的anchor与target对应信息
+    match_anchors, targets_gain, offsets = anchor_tensor[j], targets_gain.repeat(num_anchors, 1, 1)[j], 0  # filter
+
+    # overlaps
+    grid_xy = targets_gain[:, 2:4]  # grid xy
+    zeros_xy = torch.zeros_like(grid_xy)
+    if rect_style == 'rect2':
+        offset_gain = 0.2  # offset
+        j, k = ((grid_xy % 1. < offset_gain) & (grid_xy > 1.)).T
+        match_anchors = torch.cat((match_anchors, match_anchors[j], match_anchors[k]), 0)
+        targets_gain = torch.cat((targets_gain, targets_gain[j], targets_gain[k]), 0)
+        offsets = torch.cat((zeros_xy, zeros_xy[j] + lap_off[0], zeros_xy[k] + lap_off[1]), 0) * offset_gain
+    elif rect_style == 'rect4':
+        offset_gain = 0.5  # offset
+        j, k = ((grid_xy % 1. < offset_gain) & (grid_xy > 1.)).T
+        l, m = ((grid_xy % 1. > (1 - offset_gain)) & (grid_xy < (gain[[2, 3]] - 1.))).T
+        match_anchors = torch.cat(
+            (match_anchors, match_anchors[j], match_anchors[k], match_anchors[l], match_anchors[m]), 0)
+        targets_gain = torch.cat(
+            (targets_gain, targets_gain[j], targets_gain[k], targets_gain[l], targets_gain[m]), 0)
+        offsets = torch.cat((zeros_xy, zeros_xy[j] + lap_off[0], zeros_xy[k] + lap_off[1],
+                             zeros_xy[l] + lap_off[2], zeros_xy[m] + lap_off[3]), 0) * offset_gain
+    return match_anchors, targets_gain, offsets
+
+
+def deal_targets_gain(targets_gain, offsets, anchors, match_anchors):
+    # Define
+    # long等于to(torch.int64), 数值向下取整
+    img, cls = targets_gain[:, :2].long().T  # image, class
+    grid_xy = targets_gain[:, 2:4]  # grid xy
+    grid_wh = targets_gain[:, 4:6]  # grid wh
+    grid_ij = (grid_xy - offsets).long()  # 匹配targets所在的grid cell左上角坐标
+    grid_i, grid_j = grid_ij.T  # grid xy indices
+
+    # Append
+    indic = (img, match_anchors, grid_j, grid_i)  # image, anchor, grid indic(x, y)
+    target_box = torch.cat((grid_xy - grid_ij, grid_wh), 1)  # gt box相对anchor的x,y偏移量以及w,h
+    anchor = anchors[match_anchors]  # anchor
+
+    return indic, target_box, anchor, cls
 
 
 def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6,
@@ -486,7 +600,7 @@ def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6,
     """
     Performs  Non-Maximum Suppression on inference results
 
-    param: prediction[batch, num_anchors, (num_classes+1+4) x num_anchors]
+    param: prediction[batch, num_anchors, (num_classes+1+4) img num_anchors]
     Returns detections with shape:
         nx6 (x1, y1, x2, y2, conf, cls)
     """
@@ -496,59 +610,59 @@ def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6,
     min_wh, max_wh = 2, 4096  # (pixels) minimum and maximum box width and height
     time_limit = 10.0  # seconds to quit after
 
-    t = time.time()
-    nc = prediction[0].shape[1] - 5  # number of classes
-    multi_label &= nc > 1  # multiple labels per box
+    time_before = time.time()
+    num_cls = prediction[0].shape[1] - 5  # number of classes
+    multi_label &= num_cls > 1  # multiple labels per box
     output = [None] * prediction.shape[0]
-    for xi, x in enumerate(prediction):  # image index, image inference 遍历每张图片
+    for img_idx, img in enumerate(prediction):  # image index, image inference 遍历每张图片
         # Apply constraints
-        x = x[x[:, 4] > conf_thres]  # confidence 根据obj confidence虑除背景目标
-        x = x[((x[:, 2:4] > min_wh) & (x[:, 2:4] < max_wh)).all(1)]  # width-height 虑除小目标
+        img = img[img[:, 4] > conf_thres]  # confidence 根据obj confidence虑除背景目标
+        img = img[((img[:, 2:4] > min_wh) & (img[:, 2:4] < max_wh)).all(1)]  # width-height 虑除小目标
 
         # If none remain process next image
-        if not x.shape[0]:
+        if not img.shape[0]:
             continue
 
         # Compute conf
-        x[..., 5:] *= x[..., 4:5]  # conf = obj_conf * cls_conf
+        img[..., 5:] *= img[..., 4:5]  # conf = obj_conf * cls_conf
 
-        # Box (center x, center y, width, height) to (x1, y1, x2, y2)
-        box = xywh2xyxy(x[:, :4])
+        # Box (center img, center y, width, height) to (l, t, r, b)
+        box = xywh2ltrb(img[:, :4])
 
         # Detections matrix nx6 (xyxy, conf, cls)
         if multi_label:  # 针对每个类别执行非极大值抑制
-            i, j = (x[:, 5:] > conf_thres).nonzero().t()
-            x = torch.cat((box[i], x[i, j + 5].unsqueeze(1), j.float().unsqueeze(1)), 1)
+            idx, jdx = (img[:, 5:] > conf_thres).nonzero().t()
+            img = torch.cat((box[idx], img[idx, jdx + 5].unsqueeze(1), jdx.float().unsqueeze(1)), 1)
         else:  # best class only  直接针对每个类别中概率最大的类别进行非极大值抑制处理
-            conf, j = x[:, 5:].max(1)
-            x = torch.cat((box, conf.unsqueeze(1), j.float().unsqueeze(1)), 1)[conf > conf_thres]
+            conf, jdx = img[:, 5:].max(1)
+            img = torch.cat((box, conf.unsqueeze(1), jdx.float().unsqueeze(1)), 1)[conf > conf_thres]
 
         # Filter by class
         if classes:
-            x = x[(j.view(-1, 1) == torch.tensor(classes, device=j.device)).any(1)]
+            img = img[(jdx.view(-1, 1) == torch.tensor(classes, device=jdx.device)).any(1)]
 
         # If none remain process next image
-        n = x.shape[0]  # number of boxes
-        if not n:
+        num_boxes = img.shape[0]  # number of boxes
+        if not num_boxes:
             continue
 
         # Batched NMS
-        c = x[:, 5] * 0 if agnostic else x[:, 5]  # classes
-        boxes, scores = x[:, :4].clone() + c.view(-1, 1) * max_wh, x[:, 4]  # boxes (offset by class), scores
-        i = torchvision.ops.boxes.nms(boxes, scores, iou_thres)
-        i = i[:max_num]  # 最多只保留前max_num个目标信息
-        if merge and (1 < n < 3E3):  # Merge NMS (boxes merged using weighted mean)
-            try:  # update boxes as boxes(i,4) = weights(i,n) * boxes(n,4)
-                iou = box_iou(boxes[i], boxes) > iou_thres  # iou matrix
+        cls = img[:, 5] * 0 if agnostic else img[:, 5]  # classes
+        boxes, scores = img[:, :4].clone() + cls.view(-1, 1) * max_wh, img[:, 4]  # boxes (offset by class), scores
+        idx = torchvision.ops.boxes.nms(boxes, scores, iou_thres)
+        idx = idx[:max_num]  # 最多只保留前max_num个目标信息
+        if merge and (1 < num_boxes < 3E3):  # Merge NMS (boxes merged using weighted mean)
+            try:  # update boxes as boxes(idx,4) = weights(idx,num_boxes) * boxes(num_boxes,4)
+                iou = box_iou(boxes[idx], boxes) > iou_thres  # iou matrix
                 weights = iou * scores[None]  # box weights
-                x[i, :4] = torch.mm(weights, x[:, :4]).float() / weights.sum(1, keepdim=True)  # merged boxes
-                # i = i[iou.sum(1) > 1]  # require redundancy
-            except:  # possible CUDA error https://github.com/ultralytics/yolov3/issues/1139
-                print(x, i, x.shape, i.shape)
+                img[idx, :4] = torch.mm(weights, img[:, :4]).float() / weights.sum(1, keepdim=True)  # merged boxes
+                # idx = idx[iou.sum(1) > 1]  # require redundancy
+            except Exception:  # possible CUDA error https://github.com/ultralytics/yolov3/issues/1139
+                print(img, idx, img.shape, idx.shape)
                 pass
 
-        output[xi] = x[i]
-        if (time.time() - t) > time_limit:
+        output[img_idx] = img[idx]
+        if (time.time() - time_before) > time_limit:
             break  # time limit exceeded
 
     return output
@@ -564,17 +678,17 @@ def print_model_biases(model):
     print('\nModel Bias Summary: %8s%18s%18s%18s' % ('layer', 'regression', 'objectness', 'classification'))
     try:
         multi_gpu = type(model) in (nn.parallel.DataParallel, nn.parallel.DistributedDataParallel)
-        for l in model.yolo_layers:  # print pretrained biases
+        for layer in model.yolo_layers:  # print pretrained biases
             if multi_gpu:
-                na = model.module.module_list[l].na  # number of anchors
-                b = model.module.module_list[l - 1][0].bias.view(na, -1)  # bias 3x85
+                num_anchors = model.module.module_list[layer].na  # number of anchors
+                bias_ = model.module.module_list[layer - 1][0].bias.view(num_anchors, -1)  # bias 3x85
             else:
-                na = model.module_list[l].na
-                b = model.module_list[l - 1][0].bias.view(na, -1)  # bias 3x85
-            print(' ' * 20 + '%8g %18s%18s%18s' % (l, '%5.2f+/-%-5.2f' % (b[:, :4].mean(), b[:, :4].std()),
-                                                   '%5.2f+/-%-5.2f' % (b[:, 4].mean(), b[:, 4].std()),
-                                                   '%5.2f+/-%-5.2f' % (b[:, 5:].mean(), b[:, 5:].std())))
-    except:
+                num_anchors = model.module_list[layer].na
+                bias_ = model.module_list[layer - 1][0].bias.view(num_anchors, -1)  # bias 3x85
+            print(' ' * 20 + '%8g %18s%18s%18s' % (layer, '%5.2f+/-%-5.2f' % (bias_[:, :4].mean(), bias_[:, :4].std()),
+                                                   '%5.2f+/-%-5.2f' % (bias_[:, 4].mean(), bias_[:, 4].std()),
+                                                   '%5.2f+/-%-5.2f' % (bias_[:, 5:].mean(), bias_[:, 5:].std())))
+    except Exception as e:
         pass
 
 
@@ -771,10 +885,10 @@ def apply_classifier(x, model, img, im0):
             d = d.clone()
 
             # Reshape and pad cutouts
-            b = xyxy2xywh(d[:, :4])  # boxes
+            b = ltrb2xywh(d[:, :4])  # boxes
             b[:, 2:] = b[:, 2:].max(1)[0].unsqueeze(1)  # rectangle to square
             b[:, 2:] = b[:, 2:] * 1.3 + 30  # pad
-            d[:, :4] = xywh2xyxy(b).long()
+            d[:, :4] = xywh2ltrb(b).long()
 
             # Rescale boxes from img_size to im0 size
             scale_coords(img.shape[2:], d[:, :4], im0[i].shape)
@@ -913,7 +1027,7 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
         mosaic[block_y:block_y + h, block_x:block_x + w, :] = img
         if len(targets) > 0:
             image_targets = targets[targets[:, 0] == i]
-            boxes = xywh2xyxy(image_targets[:, 2:6]).T
+            boxes = xywh2ltrb(image_targets[:, 2:6]).T
             classes = image_targets[:, 1].astype('int')
             gt = image_targets.shape[1] == 6  # ground truth if no conf column
             conf = None if gt else image_targets[:, 6]  # check for confidence presence (gt vs pred)
@@ -964,7 +1078,7 @@ def plot_lr_scheduler(optimizer, scheduler, epochs=300):
 def plot_test_txt():  # from utils.utils import *; plot_test()
     # Plot test.txt histograms
     x = np.loadtxt('test.txt', dtype=np.float32)
-    box = xyxy2xywh(x[:, :4])
+    box = ltrb2xywh(x[:, :4])
     cx, cy = box[:, 0], box[:, 1]
 
     fig, ax = plt.subplots(1, 1, figsize=(6, 6), tight_layout=True)

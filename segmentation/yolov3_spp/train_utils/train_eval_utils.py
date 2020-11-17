@@ -4,6 +4,7 @@ import sys
 import time
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.cuda import amp
 
@@ -14,14 +15,15 @@ from utils.utils import compute_loss, non_max_suppression, scale_coords
 
 
 class Trainer(object):
-    def __init__(self, model, optimizer, loss_fun, callbacks=None):
+    def __init__(self, model, optimizer, loss, loss_param_fun=None, callbacks=None):
         """Trainer
             模型训练器
 
         Args:
             model: Module
             optimizer: 优化器, Adam, SGD,...
-            loss_fun: 损失函数
+            loss: 损失函数
+            loss_param_fun: 损失函数第三参数生成函数
             callbacks: 无参函数集
 
         Returns:
@@ -29,14 +31,15 @@ class Trainer(object):
         """
         self.model = model
         self.optimizer = optimizer
-        self.loss_fun = loss_fun
+        self.loss = loss
+        self.loss_param_fun = loss_param_fun
         self.callbacks = callbacks
 
     def train_once(self, data_loader, device, epoch, print_freq,
                    multi_scale=False, img_size=(512, 512),
                    grid_min=8, grid_max=32, grid_size=32,
                    random_size=64, warmup=False):
-        """train_once: 训练模型
+        r"""train_once: 训练模型
 
         Args:
             data_loader:
@@ -91,7 +94,7 @@ class Trainer(object):
                 pred = self.model(images)
 
                 # loss: compute_loss
-                loss_dict = self.loss_fun(pred, targets, self.model)
+                loss_dict = self.loss(pred, targets)
 
                 losses = sum(loss for loss in loss_dict.values())
 
@@ -129,6 +132,9 @@ class Trainer(object):
                 lr_scheduler.step()
 
         return loss_mean, lr_now
+
+    def evaluate(self, data_loader, coco=None, device=None):
+        return None
 
     @staticmethod
     def random_size(images, img_size, rand_size=False, grid_min=32, grid_max=64, grid_size=32,

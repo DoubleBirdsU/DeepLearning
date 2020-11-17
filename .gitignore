@@ -6,3 +6,15 @@
 *__init__.py
 
 *.pt
+
+segmentation/yolov3_spp/data/my_data_label.names
+
+segmentation/yolov3_spp/data/my_data.data
+
+segmentation/yolov3_spp/data/my_train_data.shapes
+
+segmentation/yolov3_spp/data/my_train_data.txt
+
+segmentation/yolov3_spp/data/my_val_data.shapes
+
+segmentation/yolov3_spp/data/my_val_data.txt

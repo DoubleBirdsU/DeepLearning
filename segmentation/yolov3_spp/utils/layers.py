@@ -68,7 +68,8 @@ class WeightedFeatureFusion(base_module):  # weighted sum of 2 or more layers ht
             w = torch.sigmoid(self.weight) * (2 / self.num_layers)  # sigmoid weights (0-1)
             x = x * w[0]
         else:
-            raise KeyError("backward doesn't have the param 'w'.")
+            # raise KeyError("backward doesn't have the param 'w'.")
+            pass
 
         # Fusion
         nx = x.shape[1]  # input channels

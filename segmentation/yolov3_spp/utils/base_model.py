@@ -10,6 +10,8 @@ class Module(base_module):  # 复杂结构继承该类
     def __init__(self):
         super(Module, self).__init__()
         self.module_list = nn.ModuleList()
+        self.in_ch_first = None
+        self.out_ch_last = None
 
     # forward 优先级低于 __call__, 基类中包含 __call__ 时, 不会调用子类的 forward
     # 在基类中只能使用 forward, 不能使用 __call__
@@ -21,21 +23,48 @@ class Module(base_module):  # 复杂结构继承该类
     def forward_list(self, x):
         return [layer(x) for layer in self.module_list]
 
-    def collect_layers(self, modules):
-        """Collect Layers
-        :type modules: Union[List[Module], Module]
+    def collect_layers(self, modules, bool_in=False, bool_out=False):
+        # modules: Union[List[Module], Module]
+        r"""Collect Layers
+
+        Args:
+            modules: Union[List[Module], Module]
+            bool_in:
+            bool_out:
+
+        Returns:
+            None
         """
+        self._init_in_ch_first(modules, bool_in)
+        self._collect_layers(modules, bool_out)
+
+    def _init_in_ch_first(self, modules, bool_in=False):
+        if isinstance(self, Module) and (bool_in or self.in_ch_first):
+            pass
+        elif isinstance(modules, Module):
+            self.in_ch_first = modules.in_ch_first
+        elif isinstance(modules, nn.Module) and hasattr(modules, 'weight') and modules.weight.ndim > 1:
+            self.in_ch_first = modules.weight.shape[1]
+        elif isinstance(modules, list) or isinstance(modules, nn.Sequential):
+            for module in modules:
+                self._init_in_ch_first(module, bool_in)
+                if isinstance(self, Module) and self.in_ch_first:
+                    break
+
+    def _collect_layers(self, modules, bool_out=False):
         if isinstance(modules, nn.Sequential):
             self.module_list.append(modules)
         elif isinstance(modules, nn.ModuleList):
             self.module_list += modules
         elif isinstance(modules, Module):
             self.module_list += modules.module_list
+            if not bool_out:
+                self.out_ch_last = modules.out_ch_last
         elif isinstance(modules, nn.Module):
             self.add_module(modules.__class__.__name__, modules)
         elif isinstance(modules, list):
             for module in modules:
-                self.collect_layers(module)
+                self._collect_layers(module, bool_out)
 
     def add_module(self, name: str, module) -> None:
         super(Module, self).add_module(name, module)

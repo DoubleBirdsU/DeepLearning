@@ -302,7 +302,7 @@ class LoadImageAndLabels(Dataset):  # for training/testing
         nL = len(labels)  # number of labels
         if nL:
             # convert xyxy to xywh
-            labels[:, 1:5] = ltrb2xywh(labels[:, 1:5])
+            labels[:, 1:5] = ltrb2xywh(labels[:, 1:5], dim=-1)
 
             # Normalize coordinates 0-1
             labels[:, [2, 4]] /= img.shape[0]  # height

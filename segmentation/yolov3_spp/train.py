@@ -10,7 +10,7 @@ import torch.optim.lr_scheduler as lr_scheduler
 import yaml
 from torch.utils.tensorboard import SummaryWriter
 
-from models import YOLOV3_SPP, YOLO_SPP
+from models import YOLOV3_SPP, YOLO_SPP, YoloLoss
 from train_utils import train_eval_utils as train_util
 from train_utils.coco_utils import get_coco_api_from_dataset
 from train_utils.train_eval_utils import Trainer
@@ -59,8 +59,8 @@ def train(hyp):
     data_dict = parse_data_cfg(data)
     train_path = data_dict["train"]
     test_path = data_dict["valid"]
-    nc = 1 if opt.single_cls else int(data_dict["classes"])  # number of classes
-    hyp["cls"] *= nc / 80  # update coco-tuned hyp['cls'] to current dataset
+    num_cls = 1 if opt.single_cls else int(data_dict["classes"])  # number of classes
+    hyp["cls"] *= num_cls / 80  # update coco-tuned hyp['cls'] to current dataset
     hyp["obj"] *= imgsz_test / 320
 
     # Remove previous results
@@ -68,32 +68,37 @@ def train(hyp):
         os.remove(f)
 
     # Initialize model
-    net = YOLOV3_SPP(cfg).to(device)
-    model = YOLO_SPP().to(device)
+    # model = YOLOV3_SPP(cfg).to(device)
+    model = YOLO_SPP(num_cls).to(device)
 
     # 是否冻结权重，只训练predictor的权重
-    # if opt.freeze_layers:
-    #     # 索引减一对应的是predictor的索引，YOLOLayer并不是predictor
-    #     output_layer_indices = [idx - 1 for idx, module in enumerate(model.module_list) if
-    #                             isinstance(module, YOLOBlk)]
-    #     # 冻结除predictor和YOLOLayer外的所有层
-    #     freeze_layer_indeces = [x for x in range(len(model.module_list)) if
-    #                             (x not in output_layer_indices) and
-    #                             (x - 1 not in output_layer_indices)]
-    #     # Freeze non-output layers
-    #     # 总共训练3x2=6个parameters
-    #     for idx in freeze_layer_indeces:
-    #         for parameter in model.module_list[idx].parameters():
-    #             parameter.requires_grad_(False)
-    # else:
-    #     # 如果freeze_layer为False，默认仅训练除darknet53之后的部分
-    #     # 若要训练全部权重，删除以下代码
-    #     darknet_end_layer = 74  # only yolov3spp cfg
-    #     # Freeze darknet53 layers
-    #     # 总共训练21x3+3x2=69个parameters
-    #     for idx in range(darknet_end_layer + 1):  # [0, 74]
-    #         for parameter in model.module_list[idx].parameters():
-    #             parameter.requires_grad_(False)
+    if isinstance(model, YOLOV3_SPP):
+        weights = './weights/yolov3-spp-ultralytics-512.pt'
+    else:
+        weights = './weights/yolov3spp.pt'
+    if isinstance(model, YOLOV3_SPP) and False:
+        if opt.freeze_layers:
+            # 索引减一对应的是predictor的索引，YOLOLayer并不是predictor
+            output_layer_indices = [idx - 1 for idx, module in enumerate(model.module_list) if
+                                    isinstance(module, YOLOBlk)]
+            # 冻结除predictor和YOLOLayer外的所有层
+            freeze_layer_indeces = [x for x in range(len(model.module_list)) if
+                                    (x not in output_layer_indices) and
+                                    (x - 1 not in output_layer_indices)]
+            # Freeze non-output layers
+            # 总共训练3x2=6个parameters
+            for idx in freeze_layer_indeces:
+                for parameter in model.module_list[idx].parameters():
+                    parameter.requires_grad_(False)
+        else:
+            # 如果freeze_layer为False，默认仅训练除darknet53之后的部分
+            # 若要训练全部权重，删除以下代码
+            darknet_end_layer = 74  # only yolov3spp cfg
+            # Freeze darknet53 layers
+            # 总共训练21x3+3x2=69个parameters
+            for idx in range(darknet_end_layer + 1):  # [0, 74]
+                for parameter in model.module_list[idx].parameters():
+                    parameter.requires_grad_(False)
 
     # optimizer
     pg = [p for p in model.parameters() if p.requires_grad]
@@ -172,17 +177,21 @@ def train(hyp):
                                                     collate_fn=val_dataset.collate_fn)
 
     # Model parameters
-    model.nc = nc  # attach number of classes to model
-    model.hyp = hyp  # attach hyperparameters to model
-    model.gr = 1.0  # giou loss ratio (obj_loss = 1.0 or giou)
+    loss_cfg = {
+        'num_cls': num_cls,  # attach number of classes to model
+        'hyp': hyp,  # attach hyper parameters to model
+        'ratio': 1.0,  # giou loss ratio (obj_loss = 1.0 or giou)
+        'anchors': model.anchor_vec,  # anchors
+    }
     # 计算每个类别的目标个数，并计算每个类别的比重
-    # model.class_weights = labels_to_class_weights(train_dataset.labels, nc).to(device)  # attach class weights
+    # model.class_weights = labels_to_class_weights(train_dataset.labels, num_cls).to(device)  # attach class weights
 
     # start training
     # caching val_data when you have plenty of memory(RAM)
     # coco = None
     coco = get_coco_api_from_dataset(val_dataset)
-    trainer = Trainer(model, optimizer, compute_loss)
+    multi_gpu = type(model) in (nn.parallel.DataParallel, nn.parallel.DistributedDataParallel)
+    trainer = Trainer(model, optimizer, loss=YoloLoss(multi_gpu=multi_gpu, cfg=loss_cfg))
 
     print("starting traning for %g epochs..." % epochs)
     print('Using %g dataloader workers' % nw)

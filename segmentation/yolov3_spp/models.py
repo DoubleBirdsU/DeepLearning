@@ -91,6 +91,8 @@ class YOLO_SPP(Model):
 
         self.spp = blocks.SPPBlk(in_ch_first=self.fcb.out_ch_last)  # SPP
         self.yolo = blocks.YOLOBlk(1024, 512, self.anchor_vec, out_ch_last=self.out_ch_last)  # YOLOBlk
+        num_layers = self.spp.count_modules() + self.fcb.count_modules() + self.backbone.count_modules()
+        self.index_anchors = [num_layers + i for i in self.yolo.index_anchors]
 
         self.collect_layers([self.backbone, self.fcb, self.spp, self.yolo], bool_out=True)
 
@@ -345,9 +347,9 @@ class YoloLoss(object):
             if cls.shape[0]:  # if any targets
                 # 目标的标签数值不能大于给定的目标类别数
                 assert cls.max() < self.num_cls, 'Model accepts %g classes labeled from 0-%g, ' \
-                                             'however you labelled match_anchors class %g. ' \
-                                             'See https://github.com/ultralytics/yolov3/wiki/Train-Custom-Data' % (
-                                                 self.num_cls, self.num_cls - 1, cls.max())
+                                                 'however you labelled match_anchors class %g. ' \
+                                                 'See https://github.com/ultralytics/yolov3/wiki/Train-Custom-Data' % (
+                                                     self.num_cls, self.num_cls - 1, cls.max())
 
         return target_cls, target_box, indices, anchors
 
@@ -440,4 +442,3 @@ class YoloLoss(object):
         anchor = anchor_vec[match_anchors]  # anchor
 
         return indic, target_box, anchor, cls
-

@@ -156,7 +156,7 @@ class YOLOLayer(Module):
         self.num_anchors = len(anchors)  # number of anchors (3)
         self.num_classes = num_classes  # number of classes (80)
         self.num_outputs = num_classes + 5  # number of outputs (85)
-        self.nx, self.ny, self.ng = 0, 0, 0  # initialize number of x, y gridpoints
+        self.num_x, self.num_y, self.ng = 0, 0, 0  # initialize number of x, y grid points
         self.anchor_vec = self.anchors / self.stride
         self.anchor_wh = self.anchor_vec.view(1, self.num_anchors, 1, 1, 2)
         self.grid = None
@@ -165,7 +165,7 @@ class YOLOLayer(Module):
             self.training = False
             self.create_grids((img_size[1] // stride, img_size[0] // stride))  # number x, y grid points
 
-    def create_grids(self, ng=(13, 13), device="cpu"):
+    def create_grids(self, num_grid=(13, 13), device="cpu"):
         """生成 grids
 
         Param:
@@ -175,26 +175,26 @@ class YOLOLayer(Module):
         Returns:
 
         """
-        self.nx, self.ny = ng
-        self.ng = torch.tensor(ng, dtype=torch.float)
+        self.num_x, self.num_y = num_grid
+        self.ng = torch.tensor(num_grid, dtype=torch.float)
 
         # build xy offsets 构建每个cell处的anchor的xy偏移量(在feature map上的)
         if not self.training:  # 训练模式不需要回归到最终预测boxes
-            yv, xv = torch.meshgrid([torch.arange(self.ny, device=device),
-                                     torch.arange(self.nx, device=device)])
-            self.grid = torch.stack((xv, yv), 2).view((1, 1, self.ny, self.nx, 2)).float()
+            yv, xv = torch.meshgrid([torch.arange(self.num_y, device=device),
+                                     torch.arange(self.num_x, device=device)])
+            self.grid = torch.stack((xv, yv), 2).view((1, 1, self.num_y, self.num_x, 2)).float()
 
         if self.anchor_vec.device != device:
             self.anchor_vec = self.anchor_vec.to(device)
             self.anchor_wh = self.anchor_wh.to(device)
 
-    def forward(self, x, out):
+    def __call__(self, x, out):
         bool_ASFF = False  # https://arxiv.org/abs/1911.09516
         if bool_ASFF:
             i, n = self.index, self.num_layers  # index in layers, number of layers
             x = out[self.layers[i]]
             bs, _, ny, nx = x.shape  # bs, 255, 13, 13
-            if (self.nx, self.ny) != (nx, ny):
+            if (self.num_x, self.num_y) != (nx, ny):
                 self.create_grids((nx, ny), x.device)
 
             # outputs and weights
@@ -211,21 +211,21 @@ class YOLOLayer(Module):
             bs = 1  # batch size
         else:
             bs, _, ny, nx = x.shape  # batch_size, predict_param(255), grid(13), grid(13)
-            if (self.nx, self.ny) != (nx, ny) or hasattr(self, "grid") is False:  # fix num_outputs grid bug
+            if (self.num_x, self.num_y) != (nx, ny) or hasattr(self, "grid") is False:  # fix num_outputs grid bug
                 self.create_grids((nx, ny), x.device)
 
         # p.view(batch_size, 255, 13, 13) -> (batch_size, 3, 13, 13, 85)  # (bs, anchors, grid, grid, classes + xywh)
         x = x.view(bs, self.num_anchors, self.num_outputs,
-                   self.ny, self.nx).permute(0, 1, 3, 4, 2).contiguous()  # prediction
+                   self.num_y, self.num_x).permute(0, 1, 3, 4, 2).contiguous()  # prediction
 
         if self.training:
             return x
         elif ONNX_EXPORT:
             # Avoid broadcasting for ANE operations
-            m = self.num_anchors * self.nx * self.ny  # 3*
+            m = self.num_anchors * self.num_x * self.num_y  # 3*
             ng = 1. / self.ng.repeat(m, 1)
             grid = self.grid.repeat(1, self.num_anchors, 1, 1, 1).view(m, 2)
-            anchor_wh = self.anchor_wh.repeat(1, 1, self.nx, self.ny, 1).view(m, 2) * ng
+            anchor_wh = self.anchor_wh.repeat(1, 1, self.num_x, self.num_y, 1).view(m, 2) * ng
 
             x = x.view(m, self.num_outputs)
             x[:, :2] = (torch.sigmoid(x[:, 0:2]) + grid) * ng  # x, y

@@ -667,7 +667,7 @@ def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6,
     r"""Performs  Non-Maximum Suppression on inference results
 
     Args:
-         prediction: [batch, num_anchors, ny, nx, (4 + 1 + num_cls)]
+         prediction: [batch, num_anchors, num_y, num_x, (4 + 1 + num_cls)]
          conf_thres:
          iou_thres:
          multi_label:

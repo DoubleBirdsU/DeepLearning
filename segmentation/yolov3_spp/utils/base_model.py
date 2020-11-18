@@ -38,6 +38,17 @@ class Module(base_module):  # 复杂结构继承该类
         self._init_in_ch_first(modules, bool_in)
         self._collect_layers(modules, bool_out)
 
+    def count_modules(self):
+        return len(self.module_list)
+
+    def freeze_layers(self, index_except=None):
+        for idx, layer in enumerate(self.module_list):
+            if index_except is not None and idx in index_except:
+                continue
+            else:
+                for parameter in layer.parameters():
+                    parameter.requires_grad_(False)
+
     def _init_in_ch_first(self, modules, bool_in=False):
         if isinstance(self, Module) and (bool_in or self.in_ch_first):
             pass

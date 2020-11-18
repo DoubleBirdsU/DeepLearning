@@ -164,15 +164,18 @@ class YOLOBlk(Module):
         """
         super(YOLOBlk, self).__init__()
         self.anchors_vec = anchors_vec if isinstance(anchors_vec[0], torch.Tensor) else torch.Tensor(anchors_vec)
+        self.index_anchors = list()
         self.anchor_layers = [
             AnchorBlk(in_ch, out_ch, scale_factor=2, kernels_size=(1, 3, 1), anchors_vec=self.anchors_vec[0],
                       in_ch_first=in_ch_first, out_ch_last=out_ch_last)]
+        self.index_anchors.append(self.anchor_layers[-1].count_modules())
         for i in range(1, 3):
             anchor_layer = self.anchor_layers[-1]
             self.anchor_layers.append(
                 AnchorBlk(anchor_layer.out_ch_last, anchor_layer.out_ch_last // 2, upsample=True, scale_factor=2,
                           anchors_vec=self.anchors_vec[i], in_ch_first=anchor_layer.out_ch_last // 2 * 3,
                           out_ch_last=out_ch_last))
+            self.index_anchors.append(self.anchor_layers[-1].count_modules() + self.index_anchors[-1])
 
         self.collect_layers(self.anchor_layers)
 

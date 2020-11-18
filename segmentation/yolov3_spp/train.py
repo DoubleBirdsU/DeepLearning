@@ -99,6 +99,9 @@ def train(hyp):
             for idx in range(darknet_end_layer + 1):  # [0, 74]
                 for parameter in model.module_list[idx].parameters():
                     parameter.requires_grad_(False)
+    else:
+        if opt.freeze_layers:
+            model.freeze_layers(model.index_anchors)
 
     # optimizer
     pg = [p for p in model.parameters() if p.requires_grad]
@@ -139,11 +142,6 @@ def train(hyp):
 
         del ckpt
 
-    # Scheduler https://arxiv.org/pdf/1812.01187.pdf
-    lf = lambda x: ((1 + math.cos(x * math.pi / epochs)) / 2) * (1 - hyp["lrf"]) + hyp["lrf"]  # cosine
-    scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
-    scheduler.last_epoch = start_epoch  # 指定从哪个epoch开始
-
     # dataset
     # 训练集的图像尺寸指定为multi_scale_range中最大的尺寸
     train_dataset = LoadImageAndLabels(train_path, imgsz_train, batch_size,
@@ -183,88 +181,23 @@ def train(hyp):
         'ratio': 1.0,  # giou loss ratio (obj_loss = 1.0 or giou)
         'anchors': model.anchor_vec,  # anchors
     }
-    # 计算每个类别的目标个数，并计算每个类别的比重
-    # model.class_weights = labels_to_class_weights(train_dataset.labels, num_cls).to(device)  # attach class weights
 
-    # start training
-    # caching val_data when you have plenty of memory(RAM)
-    # coco = None
-    coco = get_coco_api_from_dataset(val_dataset)
+    # Scheduler https://arxiv.org/pdf/1812.01187.pdf
+    lr_lambda = lambda x: ((1 + math.cos(x * math.pi / epochs)) / 2) * (1 - hyp["lrf"]) + hyp["lrf"]  # cosine
     multi_gpu = type(model) in (nn.parallel.DataParallel, nn.parallel.DistributedDataParallel)
-    trainer = Trainer(model, optimizer, loss=YoloLoss(multi_gpu=multi_gpu, cfg=loss_cfg))
+    trainer = Trainer(model, optimizer, loss=YoloLoss(multi_gpu=multi_gpu, cfg=loss_cfg),
+                      lr_lambda=lr_lambda, last_epoch=start_epoch)
 
     print("starting traning for %g epochs..." % epochs)
     print('Using %g dataloader workers' % nw)
-    for epoch in range(start_epoch, epochs):
-        mloss, lr = trainer.train_once(train_dataloader, device, epoch,
-                                       print_freq=50,  # 打印信息的 step
-                                       multi_scale=multi_scale,  #
-                                       img_size=imgsz_train,  # 输入图像的大小
-                                       grid_min=grid_min,  # grid 的最小尺寸
-                                       grid_max=grid_max,  # grid 的最大尺寸
-                                       grid_size=gs,  # grid 的尺寸
-                                       warmup=True)
-        # mloss, lr = train_util.train_one_epoch(model, optimizer, train_dataloader,
-        #                                        device, epoch,
-        #                                        accumulate=accumulate,  # 迭代多少batch才训练完64张图片
-        #                                        img_size=imgsz_train,  # 输入图像的大小
-        #                                        multi_scale=multi_scale,
-        #                                        grid_min=grid_min,  # grid的最小尺寸
-        #                                        grid_max=grid_max,  # grid的最大尺寸
-        #                                        gs=gs,  # grid step: 32
-        #                                        print_freq=50,  # 每训练多少个step打印一次信息
-        #                                        warmup=True)
-        # update scheduler
-        scheduler.step()
-
-        if opt.notest is False or epoch == epochs - 1:
-            # evaluate on the test dataset
-            result_info = train_util.evaluate(model, val_datasetloader,
-                                              coco=coco, device=device)
-
-            coco_mAP = result_info[0]
-            voc_mAP = result_info[1]
-            coco_mAR = result_info[8]
-
-            # write into tensorboard
-            if tb_writer:
-                tags = ['train/giou_loss', 'train/obj_loss', 'train/cls_loss', 'train/loss', "learning_rate",
-                        "mAP@[IoU=0.50:0.95]", "mAP@[IoU=0.5]", "mAR@[IoU=0.50:0.95]"]
-
-                for x, tag in zip(mloss.tolist() + [lr, coco_mAP, voc_mAP, coco_mAR], tags):
-                    tb_writer.add_scalar(tag, x, epoch)
-
-            # write into txt
-            with open(results_file, "a") as f:
-                result_info = [str(round(i, 4)) for i in result_info]
-                txt = "epoch:{} {}".format(epoch, '  '.join(result_info))
-                f.write(txt + "\n")
-
-            # update best mAP(IoU=0.50:0.95)
-            if coco_mAP > best_map:
-                best_map = coco_mAP
-
-            if opt.savebest is False:
-                # save weights every epoch
-                with open(results_file, 'r') as f:
-                    save_files = {
-                        'model': model.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'training_results': f.read(),
-                        'epoch': epoch,
-                        'best_map': best_map}
-                    torch.save(save_files, "./weights/yolov3spp-{}.pt".format(epoch))
-            else:
-                # only save best weights
-                if best_map == coco_mAP:
-                    with open(results_file, 'r') as f:
-                        save_files = {
-                            'model': model.state_dict(),
-                            'optimizer': optimizer.state_dict(),
-                            'training_results': f.read(),
-                            'epoch': epoch,
-                            'best_map': best_map}
-                        torch.save(save_files, best.format(epoch))
+    trainer.fit_generate(train_dataloader,
+                         epochs=epochs,
+                         test_loader=val_datasetloader,
+                         print_freq=50,
+                         save_best=True,
+                         multi_scale=multi_scale,
+                         img_size=imgsz_train, grid_min=grid_min, grid_max=grid_max, grid_size=gs,
+                         device=device, warmup=True)
 
 
 if __name__ == '__main__':

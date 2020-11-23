@@ -26,7 +26,7 @@ def make_divisible(v, divisor):
 class Flatten(base_module):
     # Use after nn.AdaptiveAvgPool2d(1) to remove last 2 dimensions
     @staticmethod
-    def __call__(x):
+    def forward(x):
         return x.view(x.size(0), -1)
 
 
@@ -36,7 +36,7 @@ class Concat(base_module):
         super(Concat, self).__init__()
         self.d = dimension
 
-    def __call__(self, x):
+    def forward(self, x):
         return torch.cat(x, self.d)
 
 
@@ -46,7 +46,7 @@ class FeatureConcat(base_module):
         self.layers = layers  # layer indices
         self.multiple = len(layers) > 1  # multiple layers flag
 
-    def __call__(self, x, outputs):
+    def forward(self, x, outputs):
         return torch.cat([outputs[i] for i in self.layers], 1) if self.multiple else outputs[self.layers[0]]
 
 
@@ -62,7 +62,7 @@ class WeightedFeatureFusion(base_module):  # weighted sum of 2 or more layers ht
         if weight:
             self.weight = nn.Parameter(torch.zeros(self.num_layers), requires_grad=True)  # layer weights
 
-    def __call__(self, x, outputs):
+    def forward(self, x, outputs):
         # Weights
         if self.bool_weight:
             w = torch.sigmoid(self.weight) * (2 / self.num_layers)  # sigmoid weights (0-1)
@@ -123,7 +123,7 @@ class Activation(base_module):
             elif activation == 'sigmoid':
                 self.act = nn.Sigmoid()
 
-    def __call__(self, x):
+    def forward(self, x):
         return self.act(x)
 
 
@@ -150,7 +150,7 @@ class MaxPool2D(nn.MaxPool2d):
         elif padding_value != 0.:
             self.pad = nn.ConstantPad2d((kernel_size - 1) // 2, padding_value)
 
-    def __call__(self, x):
+    def forward(self, x):
         return super().forward(self.pad(x) if self.pad else x)
 
     def _forward_unimplemented(self, *input: Any) -> None:
@@ -182,7 +182,7 @@ class MixConv2d(base_module):  # MixConv: Mixed Depthwise Convolutional Kernels 
                       dilation=dilation,
                       bias=bias) for g in range(groups)])
 
-    def __call__(self, x):
+    def forward(self, x):
         return torch.cat([m(x) for m in self.m], 1)
 
 
@@ -231,25 +231,30 @@ class MishImplementation(torch.autograd.Function):
 
 
 class MemoryEfficientSwish(base_module):
-    def __call__(self, x):
+    @staticmethod
+    def forward(x):
         return SwishImplementation.apply(x)
 
 
 class MemoryEfficientMish(base_module):
-    def __call__(self, x):
+    @staticmethod
+    def forward(x):
         return MishImplementation.apply(x)
 
 
 class Swish(base_module):
-    def __call__(self, x):
+    @staticmethod
+    def forward(x):
         return x * torch.sigmoid(x)
 
 
 class HardSwish(base_module):  # https://arxiv.org/pdf/1905.02244.pdf
-    def __call__(self, x):
+    @staticmethod
+    def forward(x):
         return x * F.hardtanh(x + 3, 0., 6., True) / 6.
 
 
 class Mish(base_module):  # https://github.com/digantamisra98/Mish
-    def __call__(self, x):
+    @staticmethod
+    def forward(x):
         return x * F.softplus(x).tanh()

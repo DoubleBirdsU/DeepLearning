@@ -7,6 +7,7 @@ import onnxruntime
 from matplotlib import pyplot as plt
 
 from draw_box_utils import draw_box
+from utils.utils import xywh2ltrb
 
 
 def to_numpy(tensor):
@@ -96,16 +97,6 @@ def turn_back_coords(img1_shape, coords, img0_shape, ratio_pad=None):
     return coords
 
 
-def xywh2xyxy(x: np.ndarray):
-    # Convert nx4 boxes from [x, y, w, h] to [x1, y1, x2, y2] where xy1=top-left, xy2=bottom-right
-    y = np.zeros_like(x)
-    y[:, 0] = x[:, 0] - x[:, 2] / 2  # top left x
-    y[:, 1] = x[:, 1] - x[:, 3] / 2  # top left y
-    y[:, 2] = x[:, 0] + x[:, 2] / 2  # bottom right x
-    y[:, 3] = x[:, 1] + x[:, 3] / 2  # bottom right y
-    return y
-
-
 def bboxes_iou(boxes1: np.ndarray, boxes2: np.ndarray) -> np.ndarray:
     boxes1_area = (boxes1[..., 2] - boxes1[..., 0]) * (boxes1[..., 3] - boxes1[..., 1])
     boxes2_area = (boxes2[..., 2] - boxes2[..., 0]) * (boxes2[..., 3] - boxes2[..., 1])
@@ -170,7 +161,7 @@ def post_process(pred: np.ndarray, multi_label=False, conf_thres=0.3):
     if pred.shape[0] == 0:
         return np.empty((0, 6))  # [x, y, x, y, score, class]
 
-    box = xywh2xyxy(pred[:, :4])
+    box = xywh2ltrb(pred[:, :4], dim=-1)
     # Detections matrix nx6 (xyxy, conf, cls)
     if multi_label:  # 针对每个类别执行非极大值抑制
         # i, j = (x[:, 5:] > conf_thres).nonzero().t()
@@ -187,7 +178,7 @@ def post_process(pred: np.ndarray, multi_label=False, conf_thres=0.3):
 
     n = pred.shape[0]  # number of boxes
     if n == 0:
-        return np.empty((0, 6))  # [x, y, x, y, score, class]
+        return np.empty((0, 6))  # [l, t, r, b, score, class]
 
     cls = pred[:, 5]  # classes
     boxes, scores = pred[:, :4] + cls.reshape(-1, 1) * max_wh, pred[:, 4:5]
@@ -201,7 +192,7 @@ def post_process(pred: np.ndarray, multi_label=False, conf_thres=0.3):
 
 def main():
     img_size = 512
-    save_path = "yolov3spp.onnx"
+    save_path = "./logs/yolov3spp.onnx"
     img_path = "test.jpg"
     input_size = (img_size, img_size)  # h, w
 

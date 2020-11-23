@@ -90,9 +90,9 @@ class Trainer(object):
         opt_dict = self.optimizer.state_dict
         best_map = 0.0
         for epoch in range(epochs):
-            loss_mean, lr = loss_mean, lr_now = self._train_one_epoch(
-                train_loader, batch_size, epoch, test_loader, print_freq, multi_scale,
-                img_size, grid_min, grid_max, grid_size, random_size, device, warmup)
+            loss_mean, lr = loss_mean, lr_now = self._train_one_epoch(train_loader, batch_size, epoch, print_freq,
+                                                                      multi_scale, img_size, grid_min, grid_max,
+                                                                      grid_size, random_size, device, warmup)
 
             # update lr_scheduler
             self.lr_scheduler.step()
@@ -146,10 +146,76 @@ class Trainer(object):
                                 'best_map': best_map}
                             torch.save(save_files, best_file_name.format(epoch))
 
+            if test_loader:
+                evaluate(self.model, test_loader)
+
         return self
 
+    @torch.no_grad()
     def evaluate(self, data_loader, coco=None, device=None):
-        return None
+        n_threads = torch.get_num_threads()
+        # FIXME remove this and make paste_masks_in_image run on the GPU
+        torch.set_num_threads(1)
+        if not device:
+            device = torch.device("cpu")
+        self.model.eval()
+        metric_logger = utils.MetricLogger(delimiter="  ")
+        header = "Test: "
+
+        if coco is None:
+            coco = get_coco_api_from_dataset(data_loader.dataset)
+        iou_types = _get_iou_types(self.model)
+        coco_evaluator = CocoEvaluator(coco, iou_types)
+
+        for imgs, targets, paths, shapes, img_index in metric_logger.log_every(data_loader, 100, header):
+            imgs = imgs.to(device).float() / 255.0  # uint8 to float32, 0 - 255 to 0.0 - 1.0
+
+            # 当使用CPU时，跳过GPU相关指令
+            if device != torch.device("cpu"):
+                torch.cuda.synchronize(device)
+
+            model_time = time.time()
+            pred = self.model(imgs)[0]  # only get inference result
+            pred = non_max_suppression(pred, conf_thres=0.001, iou_thres=0.6, multi_label=False)
+            outputs = []
+            for index, p in enumerate(pred):
+                if p is None:
+                    p = torch.empty((0, 6), device=device)
+                    boxes = torch.empty((0, 4), device=device)
+                else:
+                    # xmin, ymin, xmax, ymax
+                    boxes = p[:, :4]
+                    # shapes: (h0, w0), ((h / h0, w / w0), pad)
+                    # 将boxes信息还原回原图尺度，这样计算的mAP才是准确的
+                    boxes = scale_coords(imgs[index].shape[1:], boxes, shapes[index][0]).round()
+
+                # 注意这里传入的boxes格式必须是xmin, ymin, xmax, ymax，且为绝对坐标
+                info = {"boxes": boxes.to(device),
+                        "labels": p[:, 5].to(device=device, dtype=torch.int64),
+                        "scores": p[:, 4].to(device)}
+                outputs.append(info)
+            model_time = time.time() - model_time
+
+            res = {img_id: output for img_id, output in zip(img_index, outputs)}
+
+            evaluator_time = time.time()
+            coco_evaluator.update(res)
+            evaluator_time = time.time() - evaluator_time
+            metric_logger.update(model_time=model_time, evaluator_time=evaluator_time)
+
+        # gather the stats from all processes
+        metric_logger.synchronize_between_processes()
+        print("Averaged stats:", metric_logger)
+        coco_evaluator.synchronize_between_processes()
+
+        # accumulate predictions from all images
+        coco_evaluator.accumulate()
+        coco_evaluator.summarize()
+        torch.set_num_threads(n_threads)
+
+        result_info = coco_evaluator.coco_eval[iou_types[0]].stats.tolist()  # numpy to list
+
+        return result_info
 
     @staticmethod
     def random_size(images, img_size, rand_size=False, grid_min=32, grid_max=64, grid_size=32,
@@ -170,8 +236,7 @@ class Trainer(object):
             self,
             train_loader,
             batch_size=0,
-            epochs=0,
-            test_loader=None,
+            epoch=0,
             print_freq=1,
             multi_scale=False,
             img_size=(512, 512),
@@ -185,10 +250,10 @@ class Trainer(object):
         self.model.train()
         metric_logger = utils.MetricLogger(delimiter="  ")
         metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-        header = 'Epoch: [{}]'.format(epochs)
+        header = 'Epoch: [{}]'.format(epoch)
 
         lr_scheduler = None
-        if epochs == 0 and warmup:  # 当训练第一轮（epoch=0）时，启用warmup训练方式，可理解为热身训练
+        if epoch == 0 and warmup:  # 当训练第一轮（epoch=0）时，启用warmup训练方式，可理解为热身训练
             warmup_factor = 1.0 / 1000
             warmup_iters = min(1000, len(train_loader) - 1)
 
@@ -203,7 +268,7 @@ class Trainer(object):
         batch_size = len(train_loader)  # number of batches
         for i, (images, targets, paths, _, _) in enumerate(metric_logger.log_every(train_loader, print_freq, header)):
             # count_batch 统计从 epoch0 开始的所有 batch 数
-            count_batch = i + batch_size * epochs  # number integrated batches (since train start)
+            count_batch = i + batch_size * epoch  # number integrated batches (since train start)
             images = images.to(device).float() / 255.0  # uint8 to float32, 0 - 255 to 0.0 - 1.0
             targets = targets.to(device)
 

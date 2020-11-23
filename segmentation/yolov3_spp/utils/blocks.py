@@ -73,7 +73,7 @@ class DarknetBlk(Module):
 
         self.collect_layers(self.feb_list)
 
-    def __call__(self, x):  # 优先级高于 forward
+    def forward(self, x):  # 优先级高于 forward
         return x + super().forward(x)
 
 
@@ -87,7 +87,7 @@ class SPPBlk(Module):
             modules.append(layers.MaxPool2D(kernel_size=kernel_size, stride=1, padding='tiny-same'))
         self.collect_layers(modules, bool_in=True, bool_out=True)
 
-    def __call__(self, x):
+    def forward(self, x):
         return torch.cat([x] + super().forward_list(x), 1)
 
 
@@ -98,7 +98,7 @@ class UpSampleBlk(Module):
             FeatureExtractorBlk(in_ch, out_ch, 1, 1, padding='tiny-same', bn=True, activation='leaky'),
             nn.Upsample(scale_factor=scale_factor)])
 
-    def __call__(self, inputs):
+    def forward(self, inputs):
         return torch.cat([super().forward(inputs[0]), inputs[1]], 1)
 
 
@@ -137,7 +137,7 @@ class AnchorBlk(Module):
 
         self.collect_layers([self.us_block, self.fcb, self.anchor_list], bool_out=True)
 
-    def __call__(self, inputs):  # 禁止异常传递, 反常案例 e.g. x = inputs[1], shortcut = inputs[0].
+    def forward(self, inputs):  # 禁止异常传递, 反常案例 e.g. x = inputs[1], shortcut = inputs[0].
         out = self.us_block([inputs[1], inputs[0]]) if \
             self.us_block and isinstance(inputs[1], torch.Tensor) else inputs[0]
         out = anchor = self.fcb(out)
@@ -179,7 +179,7 @@ class YOLOBlk(Module):
 
         self.collect_layers(self.anchor_layers)
 
-    def __call__(self, inputs):
+    def forward(self, inputs):
         """YOLOBlk
         Args:
             inputs: [in_anchor1, in_anchor2, in_anchor3]

@@ -188,7 +188,7 @@ class YOLOLayer(Module):
             self.anchor_vec = self.anchor_vec.to(device)
             self.anchor_wh = self.anchor_wh.to(device)
 
-    def __call__(self, x, out):
+    def forward(self, x, out):
         bool_ASFF = False  # https://arxiv.org/abs/1911.09516
         if bool_ASFF:
             i, n = self.index, self.num_layers  # index in layers, number of layers

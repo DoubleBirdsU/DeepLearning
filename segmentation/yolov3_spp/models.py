@@ -41,7 +41,7 @@ class Darknet53(Model):
 
         self.collect_layers(self.blocks_list)
 
-    def __call__(self, x):
+    def forward(self, x):
         feature_maps = list()
         for i, block in enumerate(self.blocks_list):
             x = block(x)
@@ -96,7 +96,7 @@ class YOLO_SPP(Model):
 
         self.collect_layers([self.backbone, self.fcb, self.spp, self.yolo], bool_out=True)
 
-    def __call__(self, x):
+    def forward(self, x):
         feature_maps = self.backbone(x)
         x = self.spp(self.fcb(feature_maps[-1]))
         anchor1, anchor2, anchor3 = self.yolo([x, feature_maps[1], feature_maps[0]])
@@ -118,7 +118,7 @@ class YOLOV3_SPP(Model):
         self.seen = np.array([0], dtype=np.int64)  # (int64) number of images seen during training
         self.info(verbose) if not ONNX_EXPORT else None  # print model description
 
-    def __call__(self, x, augment=False, verbose=False):
+    def forward(self, x, augment=False, verbose=False):
         if not augment:
             return self.forward_once(x)
         else:  # Augment images (inference and test only) https://github.com/ultralytics/yolov3/issues/931

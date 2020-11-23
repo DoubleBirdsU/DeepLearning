@@ -15,7 +15,8 @@ class Module(base_module):  # 复杂结构继承该类
 
     # forward 优先级低于 __call__, 基类中包含 __call__ 时, 不会调用子类的 forward
     # 在基类中只能使用 forward, 不能使用 __call__
-    def forward(self, x):
+    def forward(self, *args, **kwargs):
+        x = args[0]
         for layer in self.module_list:
             x = layer(x)
         return x

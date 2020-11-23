@@ -6,53 +6,43 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.optim.lr_scheduler as lr_scheduler
 import yaml
 from torch.utils.tensorboard import SummaryWriter
 
 from models import YOLOV3_SPP, YOLO_SPP, YoloLoss
-from train_utils import train_eval_utils as train_util
-from train_utils.coco_utils import get_coco_api_from_dataset
 from train_utils.train_eval_utils import Trainer
 from utils.blocks import YOLOBlk
 from utils.datasets import LoadImageAndLabels
-from utils.model import YOLOLayer
 from utils.parse_config import parse_data_cfg
-from utils.utils import check_file, compute_loss
+from utils.utils import check_file
 
 
-def train(hyp):
+def train(hyper):
     device = torch.device(opt.device if torch.cuda.is_available() else "cpu")
     print("Using {} device training.".format(device.type))
 
-    wdir = "weights" + os.sep  # weights dir
-    best = wdir + "best.pt"
     results_file = "results.txt"
-
-    cfg = opt.cfg
     data = opt.data
     epochs = opt.epochs
     batch_size = opt.batch_size
-    accumulate = max(round(64 / batch_size), 1)  # accumulate n times before optimizer update (bs 64)
-    weights = opt.weights  # initial training weights
-    imgsz_train = opt.img_size
-    imgsz_test = opt.img_size  # test image sizes
+    img_size_train = opt.img_size
+    img_size_test = opt.img_size  # test image sizes
     multi_scale = opt.multi_scale
 
     # Image sizes
     # 图像要设置成32的倍数
-    gs = 32  # (pixels) grid size
-    assert math.fmod(imgsz_test, gs) == 0, "--img-size %g must be a %g-multiple" % (imgsz_test, gs)
-    grid_min, grid_max = imgsz_test // gs, imgsz_test // gs
+    grid_size = 32  # (pixels) grid size
+    assert math.fmod(img_size_test, grid_size) == 0, "--img-size %g must be a %g-multiple" % (img_size_test, grid_size)
+    grid_min, grid_max = img_size_test // grid_size, img_size_test // grid_size
     if multi_scale:
-        imgsz_min = opt.img_size // 1.5
-        imgsz_max = opt.img_size // 0.667
+        img_size_min = opt.img_size // 1.5
+        img_size_max = opt.img_size // 0.667
 
         # 将给定的最大，最小输入尺寸向下调整到32的整数倍
-        grid_min, grid_max = imgsz_min // gs, imgsz_max // gs
-        imgsz_min, imgsz_max = int(grid_min * gs), int(grid_max * gs)
-        imgsz_train = imgsz_max  # initialize with max size
-        print("Using multi_scale training, image range[{}, {}]".format(imgsz_min, imgsz_max))
+        grid_min, grid_max = img_size_min // grid_size, img_size_max // grid_size
+        img_size_min, img_size_max = int(grid_min * grid_size), int(grid_max * grid_size)
+        img_size_train = img_size_max  # initialize with max size
+        print("Using multi_scale training, image range[{}, {}]".format(img_size_min, img_size_max))
 
     # configure run
     # init_seeds()  # 初始化随机种子，保证结果可复现
@@ -60,12 +50,12 @@ def train(hyp):
     train_path = data_dict["train"]
     test_path = data_dict["valid"]
     num_cls = 1 if opt.single_cls else int(data_dict["classes"])  # number of classes
-    hyp["cls"] *= num_cls / 80  # update coco-tuned hyp['cls'] to current dataset
-    hyp["obj"] *= imgsz_test / 320
+    hyper["cls"] *= num_cls / 80  # update coco-tuned hyp['cls'] to current dataset
+    hyper["obj"] *= img_size_test / 320
 
     # Remove previous results
-    for f in glob.glob(results_file):
-        os.remove(f)
+    for file in glob.glob(results_file):
+        os.remove(file)
 
     # Initialize model
     # model = YOLOV3_SPP(cfg).to(device)
@@ -82,12 +72,12 @@ def train(hyp):
             output_layer_indices = [idx - 1 for idx, module in enumerate(model.module_list) if
                                     isinstance(module, YOLOBlk)]
             # 冻结除predictor和YOLOLayer外的所有层
-            freeze_layer_indeces = [x for x in range(len(model.module_list)) if
+            freeze_layer_indices = [x for x in range(len(model.module_list)) if
                                     (x not in output_layer_indices) and
                                     (x - 1 not in output_layer_indices)]
             # Freeze non-output layers
             # 总共训练3x2=6个parameters
-            for idx in freeze_layer_indeces:
+            for idx in freeze_layer_indices:
                 for parameter in model.module_list[idx].parameters():
                     parameter.requires_grad_(False)
         else:
@@ -105,11 +95,10 @@ def train(hyp):
 
     # optimizer
     pg = [p for p in model.parameters() if p.requires_grad]
-    optimizer = optim.SGD(pg, lr=hyp["lr0"], momentum=hyp["momentum"],
-                          weight_decay=hyp["weight_decay"], nesterov=True)
+    optimizer = optim.SGD(pg, lr=hyper["lr0"], momentum=hyper["momentum"],
+                          weight_decay=hyper["weight_decay"], nesterov=True)
 
     start_epoch = 0
-    best_map = 0.0
     if weights.endswith(".pt") or weights.endswith(".pth"):
         ckpt = torch.load(weights, map_location=device)
 
@@ -125,7 +114,6 @@ def train(hyp):
         # load optimizer
         if ckpt["optimizer"] is not None:
             optimizer.load_state_dict(ckpt["optimizer"])
-            best_map = ckpt["best_map"]
 
         # load results
         if ckpt.get("training_results") is not None:
@@ -141,63 +129,67 @@ def train(hyp):
                 epochs += ckpt['epoch']  # finetune additional epochs
 
         del ckpt
+    bool_trainer = False
+    num_worker = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 8])  # number of workers
+    if bool_trainer:
+        # dataset
+        # 训练集的图像尺寸指定为multi_scale_range中最大的尺寸
+        train_dataset = LoadImageAndLabels(train_path, img_size_train, batch_size,
+                                           augment=True,
+                                           hyp=hyper,  # augmentation hyperparameters
+                                           rect=opt.rect,  # rectangular training
+                                           cache_images=opt.cache_images,
+                                           single_cls=opt.single_cls)
 
-    # dataset
-    # 训练集的图像尺寸指定为multi_scale_range中最大的尺寸
-    train_dataset = LoadImageAndLabels(train_path, imgsz_train, batch_size,
-                                       augment=True,
-                                       hyp=hyp,  # augmentation hyperparameters
-                                       rect=opt.rect,  # rectangular training
-                                       cache_images=opt.cache_images,
-                                       single_cls=opt.single_cls)
-
+        train_loader = torch.utils.data.DataLoader(train_dataset,
+                                                   batch_size=batch_size,
+                                                   num_workers=num_worker,
+                                                   shuffle=not opt.rect,
+                                                   pin_memory=True,
+                                                   collate_fn=train_dataset.collate_fn)
     # 验证集的图像尺寸指定为img_size(512)
-    val_dataset = LoadImageAndLabels(test_path, imgsz_test, batch_size,
-                                     hyp=hyp,
+    val_dataset = LoadImageAndLabels(test_path, img_size_test, batch_size,
+                                     hyp=hyper,
                                      rect=True,  # 将每个batch的图像调整到合适大小，可减少运算量(并不是512x512标准尺寸)
                                      cache_images=opt.cache_images,
                                      single_cls=opt.single_cls)
 
-    # dataloader
-    nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 8])  # number of workers
-    train_dataloader = torch.utils.data.DataLoader(train_dataset,
-                                                   batch_size=batch_size,
-                                                   num_workers=nw,
-                                                   # Shuffle=True unless rectangular training is used
-                                                   shuffle=not opt.rect,
-                                                   pin_memory=True,
-                                                   collate_fn=train_dataset.collate_fn)
-
-    val_datasetloader = torch.utils.data.DataLoader(val_dataset,
-                                                    batch_size=batch_size,
-                                                    num_workers=nw,
-                                                    pin_memory=True,
-                                                    collate_fn=val_dataset.collate_fn)
+    # data_loader
+    test_loader = torch.utils.data.DataLoader(val_dataset,
+                                              batch_size=batch_size,
+                                              num_workers=num_worker,
+                                              pin_memory=True,
+                                              collate_fn=val_dataset.collate_fn)
 
     # Model parameters
     loss_cfg = {
         'num_cls': num_cls,  # attach number of classes to model
-        'hyp': hyp,  # attach hyper parameters to model
+        'hyp': hyper,  # attach hyper parameters to model
         'ratio': 1.0,  # giou loss ratio (obj_loss = 1.0 or giou)
         'anchors': model.anchor_vec,  # anchors
     }
 
     # Scheduler https://arxiv.org/pdf/1812.01187.pdf
-    lr_lambda = lambda x: ((1 + math.cos(x * math.pi / epochs)) / 2) * (1 - hyp["lrf"]) + hyp["lrf"]  # cosine
+    lr_lambda = lambda x: ((1 + math.cos(x * math.pi / epochs)) / 2) * (1 - hyper["lrf"]) + hyper["lrf"]  # cosine
     multi_gpu = type(model) in (nn.parallel.DataParallel, nn.parallel.DistributedDataParallel)
     trainer = Trainer(model, optimizer, loss=YoloLoss(multi_gpu=multi_gpu, cfg=loss_cfg),
                       lr_lambda=lr_lambda, last_epoch=start_epoch)
-
-    print("starting traning for %g epochs..." % epochs)
-    print('Using %g dataloader workers' % nw)
-    trainer.fit_generate(train_dataloader,
-                         epochs=epochs,
-                         test_loader=val_datasetloader,
-                         print_freq=50,
-                         save_best=True,
-                         multi_scale=multi_scale,
-                         img_size=imgsz_train, grid_min=grid_min, grid_max=grid_max, grid_size=gs,
-                         device=device, warmup=True)
+    if bool_trainer:
+        print("starting training for %g epochs..." % epochs)
+        print('Using %g data loader workers' % num_worker)
+        trainer.fit_generate(train_loader,
+                             epochs=epochs,
+                             test_loader=test_loader,
+                             print_freq=50,
+                             save_best=True,
+                             multi_scale=multi_scale,
+                             img_size=img_size_train,
+                             grid_min=grid_min,
+                             grid_max=grid_max,
+                             grid_size=grid_size,
+                             device=device, warmup=True)
+    else:
+        trainer.evaluate(test_loader, device=device)
 
 
 if __name__ == '__main__':
@@ -206,7 +198,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch-size', type=int, default=4)
     parser.add_argument('--cfg', type=str, default='cfg/yolov3-spp.cfg', help="*.cfg path")
     parser.add_argument('--data', type=str, default='data/my_data.data', help='*.data path')
-    parser.add_argument('--hyp', type=str, default='cfg/hyp.yaml', help='hyperparameters path')
+    parser.add_argument('--hyp', type=str, default='cfg/hyp.yaml', help='hyper parameters path')
     parser.add_argument('--multi-scale', type=bool, default=True,
                         help='adjust (67%% - 150%%) img_size every 10 batches')
     parser.add_argument('--img-size', type=int, default=512, help='test size')

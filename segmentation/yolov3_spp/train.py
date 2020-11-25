@@ -3,10 +3,12 @@ import glob
 import math
 import os
 
+import yaml
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import yaml
+
+from torch.utils import data
 from torch.utils.tensorboard import SummaryWriter
 
 from models import YOLOV3_SPP, YOLO_SPP, YoloLoss
@@ -94,72 +96,33 @@ def train(hyper):
             model.freeze_layers(model.index_anchors)
 
     # optimizer
-    pg = [p for p in model.parameters() if p.requires_grad]
-    optimizer = optim.SGD(pg, lr=hyper["lr0"], momentum=hyper["momentum"],
+    params_grad = [p for p in model.parameters() if p.requires_grad]
+    optimizer = optim.SGD(params_grad, lr=hyper["lr0"], momentum=hyper["momentum"],
                           weight_decay=hyper["weight_decay"], nesterov=True)
 
     start_epoch = 0
     if weights.endswith(".pt") or weights.endswith(".pth"):
-        ckpt = torch.load(weights, map_location=device)
+        epochs, start_epoch = loadCKPT(model, optimizer, epochs, weights, results_file, device)
 
-        # load model
-        try:
-            ckpt["model"] = {k: v for k, v in ckpt["model"].items() if model.state_dict()[k].numel() == v.numel()}
-            model.load_state_dict(ckpt["model"], strict=False)
-        except KeyError as e:
-            s = "%s is not compatible with %s. Specify --weights '' or specify a --cfg compatible with %s. " \
-                "See https://github.com/ultralytics/yolov3/issues/657" % (opt.weights, opt.cfg, opt.weights)
-            raise KeyError(s) from e
-
-        # load optimizer
-        if ckpt["optimizer"] is not None:
-            optimizer.load_state_dict(ckpt["optimizer"])
-
-        # load results
-        if ckpt.get("training_results") is not None:
-            with open(results_file, "w") as file:
-                file.write(ckpt["training_results"])  # write results.txt
-
-        # epochs
-        if ckpt['epoch']:
-            start_epoch = ckpt["epoch"] + 1
-            if epochs < start_epoch:
-                print('%s has been trained for %g epochs. Fine-tuning for %g additional epochs.' %
-                      (opt.weights, ckpt['epoch'], epochs))
-                epochs += ckpt['epoch']  # finetune additional epochs
-
-        del ckpt
+    train_loader = None
     bool_trainer = False
-    num_worker = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 8])  # number of workers
+    num_workers = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 8])  # number of workers
+
+    # dataset
     if bool_trainer:
-        # dataset
-        # 训练集的图像尺寸指定为multi_scale_range中最大的尺寸
-        train_dataset = LoadImageAndLabels(train_path, img_size_train, batch_size,
-                                           augment=True,
-                                           hyp=hyper,  # augmentation hyperparameters
-                                           rect=opt.rect,  # rectangular training
-                                           cache_images=opt.cache_images,
-                                           single_cls=opt.single_cls)
+        # 训练集的图像尺寸指定为 multi_scale_range 中最大的尺寸
+        train_loader = dataLoader(train_path, img_size_train, batch_size, True, hyper, opt.rect,
+                                  cache_images=opt.cache_images,
+                                  single_cls=opt.single_cls,
+                                  num_workers=num_workers,
+                                  pin_memory=True)
 
-        train_loader = torch.utils.data.DataLoader(train_dataset,
-                                                   batch_size=batch_size,
-                                                   num_workers=num_worker,
-                                                   shuffle=not opt.rect,
-                                                   pin_memory=True,
-                                                   collate_fn=train_dataset.collate_fn)
-    # 验证集的图像尺寸指定为img_size(512)
-    val_dataset = LoadImageAndLabels(test_path, img_size_test, batch_size,
-                                     hyp=hyper,
-                                     rect=True,  # 将每个batch的图像调整到合适大小，可减少运算量(并不是512x512标准尺寸)
-                                     cache_images=opt.cache_images,
-                                     single_cls=opt.single_cls)
-
-    # data_loader
-    test_loader = torch.utils.data.DataLoader(val_dataset,
-                                              batch_size=batch_size,
-                                              num_workers=num_worker,
-                                              pin_memory=True,
-                                              collate_fn=val_dataset.collate_fn)
+    # 验证集的图像尺寸指定为 img_size(512)
+    test_loader = dataLoader(test_path, img_size_test, batch_size, True, hyper,
+                             cache_images=opt.cache_images,
+                             single_cls=opt.single_cls,
+                             num_workers=num_workers,
+                             pin_memory=True)
 
     # Model parameters
     loss_cfg = {
@@ -176,7 +139,7 @@ def train(hyper):
                       lr_lambda=lr_lambda, last_epoch=start_epoch)
     if bool_trainer:
         print("starting training for %g epochs..." % epochs)
-        print('Using %g data loader workers' % num_worker)
+        print('Using %g data loader workers' % num_workers)
         trainer.fit_generate(train_loader,
                              epochs=epochs,
                              test_loader=test_loader,
@@ -190,6 +153,86 @@ def train(hyper):
                              device=device, warmup=True)
     else:
         trainer.evaluate(test_loader, device=device)
+    pass
+
+
+def dataLoader(data_path, img_size=416, batch_size=16, augment=True, hyper=None, rect=False,
+               cache_images=False, single_cls=False, num_workers=16, pin_memory=True):
+    r"""dataLoader
+
+    Args:
+        data_path:
+        img_size: (=416)
+        batch_size: (=16)
+        augment: (=False)
+        hyper: (=None)
+        rect: (=False)
+        cache_images: (=False)
+        single_cls: (=False)
+        num_workers: (=16)
+        pin_memory: (=False)
+
+    Returns:
+        None
+    """
+    dataset = LoadImageAndLabels(
+        data_path, img_size, batch_size, augment=augment,
+        hyp=hyper, rect=rect, cache_images=cache_images, single_cls=single_cls)
+
+    data_loader = data.DataLoader(
+        dataset, batch_size=batch_size, num_workers=num_workers,
+        shuffle=not rect, pin_memory=pin_memory, collate_fn=dataset.collate_fn)
+
+    return data_loader
+
+
+def loadCKPT(model, optimizer, epochs, weights_path, file_results, device):
+    """loadCKPT
+
+    Args:
+        model:
+        optimizer:
+        epochs:
+        weights_path:
+        file_results:
+        device:
+
+    Returns:
+        None
+    """
+    ckpt = torch.load(weights_path, map_location=device)
+
+    # load model
+    try:
+        ckpt["model"] = {k: v for k, v in ckpt["model"].items() if model.state_dict()[k].numel() == v.numel()}
+        model.load_state_dict(ckpt["model"], strict=False)
+    except KeyError as e:
+        msg = "%s is not compatible with %s. Specify --weights '' or specify a --cfg compatible with %s. " \
+              "See https://github.com/ultralytics/yolov3/issues/657" % (opt.weights, opt.cfg, opt.weights)
+        raise KeyError(msg) from e
+
+    # load optimizer
+    if ckpt["optimizer"] is not None:
+        optimizer.load_state_dict(ckpt["optimizer"])
+
+    # load results
+    if ckpt.get("training_results") is not None:
+        with open(file_results, "w") as file:
+            file.write(ckpt["training_results"])  # write results.txt
+
+    # epochs
+    start_epochs = 0
+    if ckpt['epoch']:
+        start_epoch = ckpt["epoch"] + 1
+        if epochs < start_epoch:
+            print('%s has been trained for %g epochs. Fine-tuning for %g additional epochs.' %
+                  (opt.weights, ckpt['epoch'], epochs))
+            epochs += ckpt['epoch']  # finetune additional epochs
+
+    # delete ckpt
+    del ckpt
+
+    return epochs, start_epochs
 
 
 if __name__ == '__main__':
@@ -218,7 +261,6 @@ if __name__ == '__main__':
     opt.cfg = check_file(opt.cfg)
     opt.data = check_file(opt.data)
     opt.hyp = check_file(opt.hyp)
-    print(opt)
 
     with open(opt.hyp) as f:
         hyp = yaml.load(f, Loader=yaml.FullLoader)

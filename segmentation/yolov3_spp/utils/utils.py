@@ -157,36 +157,43 @@ def xywh2ltrb(xywh, dim=0):
     return ltrb
 
 
-def scale_coords(img1_shape, coords, img0_shape, ratio_pad=None):
+def scale_coordinates(coordinates, old_shape, new_shape, ratio_pad=None, img_show=None):
+    """scale_coordinates
+        将预测的坐标信息转换回原图尺度
+
+    Args:
+        coordinates: 预测的box信息
+        old_shape: 缩放后的图像尺度
+        new_shape: 缩放前的图像尺度
+        ratio_pad: 缩放过程中的缩放比例以及pad
+        img_show: 显示图像函数
+
+    Returns:
+        None
     """
-    将预测的坐标信息转换回原图尺度
-    :param img1_shape: 缩放后的图像尺度
-    :param coords: 预测的box信息
-    :param img0_shape: 缩放前的图像尺度
-    :param ratio_pad: 缩放过程中的缩放比例以及pad
-    :return:
-    """
-    # Rescale coords (xyxy) from img1_shape to img0_shape
-    if ratio_pad is None:  # calculate from img0_shape
-        gain = max(img1_shape) / max(img0_shape)  # gain  = old / new
-        pad = (img1_shape[1] - img0_shape[1] * gain) / 2, (img1_shape[0] - img0_shape[0] * gain) / 2  # wh padding
+    # Rescale coords (xyxy) from old_shape to new_shape
+    if ratio_pad is None:  # calculate from new_shape
+        gain = max(old_shape) / max(new_shape)  # gain  = old / new
+        pad = (old_shape[1] - new_shape[1] * gain) / 2, (old_shape[0] - new_shape[0] * gain) / 2  # wh padding
     else:
         gain = ratio_pad[0][0]
         pad = ratio_pad[1]
 
-    coords[:, [0, 2]] -= pad[0]  # x padding
-    coords[:, [1, 3]] -= pad[1]  # y padding
-    coords[:, :4] /= gain
-    clip_coords(coords, img0_shape)
-    return coords
+    coordinates[:, [0, 2]] *= old_shape[0]
+    coordinates[:, [1, 3]] *= old_shape[1]
+    coordinates[:, [0, 2]] -= pad[0]  # x padding
+    coordinates[:, [1, 3]] -= pad[1]  # y padding
+    coordinates[:, :4] /= gain
+    clip_coordinates(coordinates, new_shape)
+    return coordinates
 
 
-def clip_coords(boxes, img_shape):
-    # Clip bounding xyxy bounding boxes to image shape (height, width)
-    boxes[:, 0].clamp_(0, img_shape[1])  # x1
-    boxes[:, 1].clamp_(0, img_shape[0])  # y1
-    boxes[:, 2].clamp_(0, img_shape[1])  # x2
-    boxes[:, 3].clamp_(0, img_shape[0])  # y2
+def clip_coordinates(boxes, img_shape):
+    # Clip bounding ltrb bounding boxes to image shape (height, width)
+    boxes[:, 0].clamp_(0, img_shape[1])  # l
+    boxes[:, 1].clamp_(0, img_shape[0])  # t
+    boxes[:, 2].clamp_(0, img_shape[1])  # r
+    boxes[:, 3].clamp_(0, img_shape[0])  # b
 
 
 def ap_per_class(tp, conf, pred_cls, target_cls):
@@ -235,16 +242,6 @@ def ap_per_class(tp, conf, pred_cls, target_cls):
             # AP from recall-precision curve
             for j in range(tp.shape[1]):
                 ap[ci, j] = compute_ap(recall[:, j], precision[:, j])
-
-            # Plot
-            # fig, ax = plt.subplots(1, 1, figsize=(5, 5))
-            # ax.plot(recall, precision)
-            # ax.set_xlabel('Recall')
-            # ax.set_ylabel('Precision')
-            # ax.set_xlim(0, 1.01)
-            # ax.set_ylim(0, 1.01)
-            # fig.tight_layout()
-            # fig.savefig('PR_curve.png', dpi=300)
 
     # Compute F1 score (harmonic mean of precision and recall)
     f1 = 2 * p * r / (p + r + 1e-16)
@@ -683,7 +680,7 @@ def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6,
 
     # Settings
     merge = False  # merge for best mAP
-    min_wh, max_wh = 2, 4096  # (pixels) minimum and maximum box width and height
+    min_wh, max_wh = 2./4096, 1. # 4096  # (pixels) minimum and maximum box width and height
     time_limit = 10.0  # seconds to quit after
 
     time_before = time.time()
@@ -738,8 +735,8 @@ def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6,
                 pass
 
         output[img_idx] = img[idx]
-        if (time.time() - time_before) > time_limit:
-            break  # time limit exceeded
+        # if (time.time() - time_before) > time_limit:
+        #     break  # time limit exceeded
 
     return output
 
@@ -864,7 +861,7 @@ def kmean_anchors(path='./data/coco64.txt', n=9, img_size=(640, 640), thr=0.20, 
         gen: generations to evolve anchors using genetic algorithm
 
     Returns:
-
+        None
     """
     from utils.datasets import LoadImageAndLabels
 
@@ -880,52 +877,39 @@ def kmean_anchors(path='./data/coco64.txt', n=9, img_size=(640, 640), thr=0.20, 
             print('%i,%i' % (round(x[0]), round(x[1])), end=',  ' if i < len(k) - 1 else '\n')  # use in *.cfg
         return k
 
-    def fitness(k):  # mutation fitness
-        iou = wh_iou(wh, torch.Tensor(k))  # iou
+    def fit_ness(key):  # mutation fitness
+        iou = wh_iou(wh, torch.Tensor(key))  # iou
         max_iou = iou.max(1)[0]
         return (max_iou * (max_iou > thr).float()).mean()  # product
 
     # Get label wh
     wh = []
     dataset = LoadImageAndLabels(path, augment=True, rect=True)
-    nr = 1 if img_size[0] == img_size[1] else 10  # number augmentation repetitions
+    num_rep = 1 if img_size[0] == img_size[1] else 10  # number augmentation repetitions
     for s, l in zip(dataset.shapes, dataset.labels):
         wh.append(l[:, 3:5] * (s / s.max()))  # image normalized to letterbox normalized wh
-    wh = np.concatenate(wh, 0).repeat(nr, axis=0)  # augment 10x
+    wh = np.concatenate(wh, 0).repeat(num_rep, axis=0)  # augment 10x
     wh *= np.random.uniform(img_size[0], img_size[1], size=(wh.shape[0], 1))  # normalized to pixels (multi-scale)
     wh = wh[(wh > 2.0).all(1)]  # remove below threshold boxes (< 2 pixels wh)
 
-    # Kmeans calculation
+    # k_means calculation
     from scipy.cluster.vq import kmeans
-    print('Running kmeans for %g anchors on %g points...' % (n, len(wh)))
+    print('Running k_means for %g anchors on %g points...' % (n, len(wh)))
     s = wh.std(0)  # sigmas for whitening
     k, dist = kmeans(wh / s, n, iter=30)  # points, mean distance
     k *= s
     wh = torch.Tensor(wh)
     k = print_results(k)
 
-    # # Plot
-    # k, d = [None] * 20, [None] * 20
-    # for i in tqdm(range(1, 21)):
-    #     k[i-1], d[i-1] = kmeans(wh / s, i)  # points, mean distance
-    # fig, ax = plt.subplots(1, 2, figsize=(14, 7))
-    # ax = ax.ravel()
-    # ax[0].plot(np.arange(1, 21), np.array(d) ** 2, marker='.')
-    # fig, ax = plt.subplots(1, 2, figsize=(14, 7))  # plot wh
-    # ax[0].hist(wh[wh[:, 0]<100, 0],400)
-    # ax[1].hist(wh[wh[:, 1]<100, 1],400)
-    # fig.tight_layout()
-    # fig.savefig('wh.png', dpi=200)
-
     # Evolve
     npr = np.random
-    f, sh, mp, s = fitness(k), k.shape, 0.9, 0.1  # fitness, generations, mutation prob, sigma
+    f, sh, mp, s = fit_ness(k), k.shape, 0.9, 0.1  # fitness, generations, mutation prob, sigma
     for _ in tqdm(range(gen), desc='Evolving anchors'):
         v = np.ones(sh)
         while (v == 1).all():  # mutate until a change occurs (prevent duplicates)
             v = ((npr.random(sh) < mp) * npr.random() * npr.randn(*sh) * s + 1).clip(0.3, 3.0)
         kg = (k.copy() * v).clip(min=2.0)
-        fg = fitness(kg)
+        fg = fit_ness(kg)
         if fg > f:
             f, k = fg, kg.copy()
             print_results(k)
@@ -967,7 +951,7 @@ def apply_classifier(x, model, img, im0):
             d[:, :4] = xywh2ltrb(b).long()
 
             # Rescale boxes from img_size to im0 size
-            scale_coords(img.shape[2:], d[:, :4], im0[i].shape)
+            scale_coordinates(d[:, :4], img.shape[2:], im0[i].shape)
 
             # Classes
             pred_cls1 = d[:, 5].long()
@@ -1003,18 +987,18 @@ def output_to_target(output, width, height):
         output = output.cpu().numpy()
 
     targets = []
-    for i, o in enumerate(output):
-        if o is not None:
-            for pred in o:
+    for i, out in enumerate(output):
+        if out is not None:
+            for pred in out:
                 box = pred[:4]
                 w = (box[2] - box[0]) / width
                 h = (box[3] - box[1]) / height
                 x = box[0] / width + w / 2
                 y = box[1] / height + h / 2
                 conf = pred[4]
-                cls = int(pred[5])
+                category = int(pred[5])
 
-                targets.append([i, cls, x, y, w, h, conf])
+                targets.append([i, category, x, y, w, h, conf])
 
     return np.array(targets)
 
@@ -1269,9 +1253,7 @@ def plot_results(start=0, stop=0, bucket='', id=()):  # from utils.utils import 
                     # y /= y[0]  # normalize
                 ax[i].plot(x, y, marker='.', label=Path(f).stem, linewidth=2, markersize=8)
                 ax[i].set_title(s[i])
-                # if i in [5, 6, 7]:  # share train and val loss y axes
-                #     ax[i].get_shared_y_axes().join(ax[i], ax[i - 5])
-        except:
+        except Exception:
             print('Warning: Plotting error for %s, skipping file' % f)
 
     ax[1].legend()

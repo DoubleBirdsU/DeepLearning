@@ -65,7 +65,7 @@ def main():
         print(t3 - t2)
 
         # process detections
-        pred[:, :4] = utils.scale_coords(img.shape[2:], pred[:, :4], img_o.shape).round()
+        pred[:, :4] = utils.scale_coordinates(pred[:, :4], img.shape[2:], img_o.shape).round()
         print(pred.shape)
 
         bboxes = pred[:, :4].detach().cpu().numpy()

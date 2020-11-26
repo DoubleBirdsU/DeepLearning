@@ -67,7 +67,7 @@ def train(hyper):
     if isinstance(model, YOLOV3_SPP):
         weights = './weights/yolov3-spp-ultralytics-512.pt'
     else:
-        weights = './weights/yolov3spp.pt'
+        weights = './weights/yolov3spp-0.pt'
     if isinstance(model, YOLOV3_SPP) and False:
         if opt.freeze_layers:
             # 索引减一对应的是predictor的索引，YOLOLayer并不是predictor
@@ -102,7 +102,7 @@ def train(hyper):
 
     start_epoch = 0
     if weights.endswith(".pt") or weights.endswith(".pth"):
-        epochs, start_epoch = loadCKPT(model, optimizer, epochs, weights, results_file, device)
+        epochs, start_epoch = loadCKPT(model, optimizer, epochs, weights, results_file, device, True)
 
     train_loader = None
     bool_trainer = False
@@ -186,7 +186,7 @@ def dataLoader(data_path, img_size=416, batch_size=16, augment=True, hyper=None,
     return data_loader
 
 
-def loadCKPT(model, optimizer, epochs, weights_path, file_results, device):
+def loadCKPT(model, optimizer, epochs, weights_path, file_results, device, training=False):
     """loadCKPT
 
     Args:
@@ -196,11 +196,13 @@ def loadCKPT(model, optimizer, epochs, weights_path, file_results, device):
         weights_path:
         file_results:
         device:
+        training:
 
     Returns:
         None
     """
     ckpt = torch.load(weights_path, map_location=device)
+    start_epochs = 0
 
     # load model
     try:
@@ -211,23 +213,23 @@ def loadCKPT(model, optimizer, epochs, weights_path, file_results, device):
               "See https://github.com/ultralytics/yolov3/issues/657" % (opt.weights, opt.cfg, opt.weights)
         raise KeyError(msg) from e
 
-    # load optimizer
-    if ckpt["optimizer"] is not None:
-        optimizer.load_state_dict(ckpt["optimizer"])
+    if training:
+        # load optimizer
+        if ckpt["optimizer"] is not None:
+            optimizer.load_state_dict(ckpt["optimizer"])
 
-    # load results
-    if ckpt.get("training_results") is not None:
-        with open(file_results, "w") as file:
-            file.write(ckpt["training_results"])  # write results.txt
+        # load results
+        if ckpt.get("training_results") is not None:
+            with open(file_results, "w") as file:
+                file.write(ckpt["training_results"])  # write results.txt
 
-    # epochs
-    start_epochs = 0
-    if ckpt['epoch']:
-        start_epoch = ckpt["epoch"] + 1
-        if epochs < start_epoch:
-            print('%s has been trained for %g epochs. Fine-tuning for %g additional epochs.' %
-                  (opt.weights, ckpt['epoch'], epochs))
-            epochs += ckpt['epoch']  # finetune additional epochs
+        # epochs
+        if ckpt['epoch']:
+            start_epoch = ckpt["epoch"] + 1
+            if epochs < start_epoch:
+                print('%s has been trained for %g epochs. Fine-tuning for %g additional epochs.' %
+                      (opt.weights, ckpt['epoch'], epochs))
+                epochs += ckpt['epoch']  # finetune additional epochs
 
     # delete ckpt
     del ckpt

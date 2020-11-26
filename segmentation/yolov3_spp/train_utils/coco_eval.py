@@ -65,7 +65,8 @@ class CocoEvaluator(object):
         else:
             raise ValueError("Unknown iou type {}".format(iou_type))
 
-    def prepare_for_coco_detection(self, predictions):
+    @staticmethod
+    def prepare_for_coco_detection(predictions):
         coco_results = []
         for original_id, prediction in predictions.items():
             if len(prediction) == 0:
@@ -89,7 +90,8 @@ class CocoEvaluator(object):
             )
         return coco_results
 
-    def prepare_for_coco_segmentation(self, predictions):
+    @staticmethod
+    def prepare_for_coco_segmentation(predictions):
         coco_results = []
         for original_id, prediction in predictions.items():
             if len(prediction) == 0:
@@ -124,7 +126,8 @@ class CocoEvaluator(object):
             )
         return coco_results
 
-    def prepare_for_coco_keypoint(self, predictions):
+    @staticmethod
+    def prepare_for_coco_keypoint(predictions):
         coco_results = []
         for original_id, prediction in predictions.items():
             if len(prediction) == 0:

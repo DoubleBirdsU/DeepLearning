@@ -266,7 +266,7 @@ class LoadImageAndLabels(Dataset):  # for training/testing
         if self.mosaic:
             # load mosaic
             img, labels = load_mosaic(self, index)
-            shapes = None
+            shapes = self.shapes[index]
         else:
             # load image
             img, (h0, w0), (h, w) = load_image(self, index)

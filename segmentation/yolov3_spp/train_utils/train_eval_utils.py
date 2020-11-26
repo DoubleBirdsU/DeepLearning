@@ -5,16 +5,18 @@ import sys
 import time
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 from torch.cuda import amp
 from torch.optim import lr_scheduler
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.tensorboard import SummaryWriter
+from matplotlib import pyplot as plt
 
 import train_utils.distributed_utils as utils
 from train_utils.coco_eval import CocoEvaluator
 from train_utils.coco_utils import get_coco_api_from_dataset
-from utils.utils import compute_loss, non_max_suppression, scale_coords
+from utils.utils import non_max_suppression, scale_coordinates
 
 
 class Trainer(object):
@@ -86,7 +88,6 @@ class Trainer(object):
         Returns:
             None
         """
-
         opt_dict = self.optimizer.state_dict
         best_map = 0.0
         for epoch in range(epochs):
@@ -99,7 +100,7 @@ class Trainer(object):
 
             if test_loader and epoch == epochs - 1:
                 # evaluate on the test dataset
-                result_info = evaluate(self.model, test_loader, device=device)
+                result_info = self.evaluate(self.model, test_loader, device=device)
 
                 coco_mAP = result_info[0]
                 voc_mAP = result_info[1]
@@ -147,7 +148,7 @@ class Trainer(object):
                             torch.save(save_files, best_file_name.format(epoch))
 
             if test_loader:
-                evaluate(self.model, test_loader)
+                self.evaluate(self.model, test_loader)
 
         return self
 
@@ -167,32 +168,34 @@ class Trainer(object):
         iou_types = _get_iou_types(self.model)
         coco_evaluator = CocoEvaluator(coco, iou_types)
 
-        for imgs, targets, paths, shapes, img_index in metric_logger.log_every(data_loader, 100, header):
-            imgs = imgs.to(device).float() / 255.0  # uint8 to float32, 0 - 255 to 0.0 - 1.0
+        log_every = metric_logger.log_every(data_loader, 100, header)
+        for images, targets, paths, shapes, img_index in log_every:
+            images = images.to(device).float() / 255.0  # uint8 to float32, 0 - 255 to 0.0 - 1.0
 
             # 当使用CPU时，跳过GPU相关指令
             if device != torch.device("cpu"):
                 torch.cuda.synchronize(device)
 
             model_time = time.time()
-            pred = self.model(imgs)[0]  # only get inference result
+            pred = self.model(images)[0]  # only get inference result
             pred = non_max_suppression(pred, conf_thres=0.001, iou_thres=0.6, multi_label=False)
             outputs = []
-            for index, p in enumerate(pred):
-                if p is None:
-                    p = torch.empty((0, 6), device=device)
+            for index, pred_i in enumerate(pred):
+                if pred_i is None:
+                    pred_i = torch.empty((0, 6), device=device)
                     boxes = torch.empty((0, 4), device=device)
                 else:
-                    # xmin, ymin, xmax, ymax
-                    boxes = p[:, :4]
+                    boxes = pred_i[:, :4]  # l, t, r, b
                     # shapes: (h0, w0), ((h / h0, w / w0), pad)
                     # 将boxes信息还原回原图尺度，这样计算的mAP才是准确的
-                    boxes = scale_coords(imgs[index].shape[1:], boxes, shapes[index][0]).round()
+                    boxes = scale_coordinates(boxes, images[index].shape[1:], shapes[index]).round()
 
-                # 注意这里传入的boxes格式必须是xmin, ymin, xmax, ymax，且为绝对坐标
+                image = images[index]
+                self.img_show(image, boxes)
+                # 注意这里传入的boxes格式必须是 l_abs, t_abs, r_abs, b_abs，且为绝对坐标
                 info = {"boxes": boxes.to(device),
-                        "labels": p[:, 5].to(device=device, dtype=torch.int64),
-                        "scores": p[:, 4].to(device)}
+                        "labels": pred_i[:, 5].to(device=device, dtype=torch.int64),
+                        "scores": pred_i[:, 4].to(device)}
                 outputs.append(info)
             model_time = time.time() - model_time
 
@@ -231,6 +234,30 @@ class Trainer(object):
             new_shape = [math.ceil(x * scale_factor / grid_size) * grid_size for x in images.shape[2:]]
             images = F.interpolate(images, size=new_shape, mode=interpolate_mode, align_corners=False)
         return images, img_size
+
+    @staticmethod
+    def img_show(img, boxes=None, channel='first_channel'):
+        img = img.cpu().numpy() if isinstance(img, torch.Tensor) else img.clone()
+        if 'first_channel' == channel:
+            img = np.transpose(img, (1, 2, 0))
+
+        if boxes is not None:
+            for box in boxes:  # l, t, r, b
+                Trainer.add_box(img, box, channel='last_channel')
+
+        plt.imshow(img)
+        plt.show()
+        pass
+
+    @staticmethod
+    def add_box(img, box, color=(1., 0., 0.), channel='first_channel'):
+        # box=(l, t, r, b)
+        l, t, r, b = box.int()
+        for i in range(3):
+            img[t:b, l, i] = color[i]  # l
+            img[t, l:r, i] = color[i]  # t
+            img[t:b, r, i] = color[i]  # r
+            img[b, l:r, i] = color[i]  # b
 
     def _train_one_epoch(
             self,
@@ -330,73 +357,6 @@ class Trainer(object):
             d = f[:f.rfind('/')]
             if not os.path.exists(d):
                 os.mkdir(d)
-
-
-@torch.no_grad()
-def evaluate(model, data_loader, coco=None, device=None):
-    n_threads = torch.get_num_threads()
-    # FIXME remove this and make paste_masks_in_image run on the GPU
-    torch.set_num_threads(1)
-    cpu_device = torch.device("cpu")
-    model.eval()
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    header = "Test: "
-
-    if coco is None:
-        coco = get_coco_api_from_dataset(data_loader.dataset)
-    iou_types = _get_iou_types(model)
-    coco_evaluator = CocoEvaluator(coco, iou_types)
-
-    for imgs, targets, paths, shapes, img_index in metric_logger.log_every(data_loader, 100, header):
-        imgs = imgs.to(device).float() / 255.0  # uint8 to float32, 0 - 255 to 0.0 - 1.0
-        # targets = targets.to(device)
-
-        # 当使用CPU时，跳过GPU相关指令
-        if device != torch.device("cpu"):
-            torch.cuda.synchronize(device)
-
-        model_time = time.time()
-        pred = model(imgs)[0]  # only get inference result
-        pred = non_max_suppression(pred, conf_thres=0.001, iou_thres=0.6, multi_label=False)
-        outputs = []
-        for index, p in enumerate(pred):
-            if p is None:
-                p = torch.empty((0, 6), device=cpu_device)
-                boxes = torch.empty((0, 4), device=cpu_device)
-            else:
-                # xmin, ymin, xmax, ymax
-                boxes = p[:, :4]
-                # shapes: (h0, w0), ((h / h0, w / w0), pad)
-                # 将boxes信息还原回原图尺度，这样计算的mAP才是准确的
-                boxes = scale_coords(imgs[index].shape[1:], boxes, shapes[index][0]).round()
-
-            # 注意这里传入的boxes格式必须是xmin, ymin, xmax, ymax，且为绝对坐标
-            info = {"boxes": boxes.to(cpu_device),
-                    "labels": p[:, 5].to(device=cpu_device, dtype=torch.int64),
-                    "scores": p[:, 4].to(cpu_device)}
-            outputs.append(info)
-        model_time = time.time() - model_time
-
-        res = {img_id: output for img_id, output in zip(img_index, outputs)}
-
-        evaluator_time = time.time()
-        coco_evaluator.update(res)
-        evaluator_time = time.time() - evaluator_time
-        metric_logger.update(model_time=model_time, evaluator_time=evaluator_time)
-
-    # gather the stats from all processes
-    metric_logger.synchronize_between_processes()
-    print("Averaged stats:", metric_logger)
-    coco_evaluator.synchronize_between_processes()
-
-    # accumulate predictions from all images
-    coco_evaluator.accumulate()
-    coco_evaluator.summarize()
-    torch.set_num_threads(n_threads)
-
-    result_info = coco_evaluator.coco_eval[iou_types[0]].stats.tolist()  # numpy to list
-
-    return result_info
 
 
 def _get_iou_types(model):

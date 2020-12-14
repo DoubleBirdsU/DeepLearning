@@ -221,8 +221,6 @@ def createIndex(self):
         for ann in self.dataset['annotations']:
             catToImgs[ann['category_id']].append(ann['image_id'])
 
-    # print('index created!')
-
     # create class members
     self.anns = anns
     self.imgToAnns = imgToAnns

@@ -6,7 +6,7 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 
-from base.base_model import base_model
+from base.base_model import base_model, Module
 
 
 def make_divisible(v, divisor):
@@ -23,14 +23,50 @@ def make_divisible(v, divisor):
     return math.ceil(v / divisor) * divisor
 
 
-class Flatten(base_model):
+def auto_padding(kernel_size=0, padding='same', padding_value=0.):
+    return (kernel_size - 1) // 2 if 'same' in padding and padding_value == 0. else 0
+
+
+def pad(kernel_size=0, padding='same', stride=1, padding_value=0.):
+    pad_layer = None
+    # Padding
+    if 'tiny-same' == padding and kernel_size == 2 and stride == 1:
+        pad_layer = nn.ZeroPad2d((0, 1, 0, 1))  # l, r, t, b; yoloV3-tiny
+    elif 'same' in padding and padding_value != 0.:
+        pad_layer = nn.ConstantPad2d((kernel_size - 1) // 2, padding_value)
+    return pad_layer
+
+
+def Activation(activation='relu', **kwargs):
+    activation = activation.lower()
+    if 'leaky' == activation:
+        negativate_slope = 1e-2 if 'negativate_slope' not in kwargs else kwargs['negativate_slope']
+        inplace = False if 'inplace' not in kwargs else kwargs['inplace']
+        act = nn.LeakyReLU(negativate_slope, inplace)
+    elif 'selu' == activation:
+        inplace = False if 'inplace' not in kwargs else kwargs['inplace']
+        act = nn.SELU(inplace)
+    elif 'sigmoid' == activation:
+        act = nn.Sigmoid()
+    else:
+        inplace = False if 'inplace' not in kwargs else kwargs['inplace']
+        act = nn.ReLU(inplace)
+    return act
+
+
+class Layer(Module):
+    def __init__(self):
+        super(Layer, self).__init__()
+
+
+class Flatten(Layer):
     # Use after nn.AdaptiveAvgPool2d(1) to remove last 2 dimensions
     @staticmethod
     def forward(x):
         return x.view(x.size(0), -1)
 
 
-class Concat(base_model):
+class Concat(Layer):
     # Concatenate a list of tensors along dimension
     def __init__(self, dimension=1):
         super(Concat, self).__init__()
@@ -40,7 +76,7 @@ class Concat(base_model):
         return torch.cat(x, self.d)
 
 
-class FeatureConcat(base_model):
+class FeatureConcat(Layer):
     def __init__(self, layers):
         super(FeatureConcat, self).__init__()
         self.layers = layers  # layer indices
@@ -50,10 +86,9 @@ class FeatureConcat(base_model):
         return torch.cat([outputs[i] for i in self.layers], 1) if self.multiple else outputs[self.layers[0]]
 
 
-class WeightedFeatureFusion(base_model):  # weighted sum of 2 or more layers https://arxiv.org/abs/1911.09070
+class WeightedFeatureFusion(Layer):  # weighted sum of 2 or more layers https://arxiv.org/abs/1911.09070
     """将多个特征矩阵的值进行融合
     """
-
     def __init__(self, layers, weight=False):
         super(WeightedFeatureFusion, self).__init__()
         self.layers = layers  # layer indices
@@ -96,19 +131,14 @@ class MaxPool2D(nn.MaxPool2d):
 
         :param kernel_size: 内核尺寸
         :param stride: 步长
-        :param padding: 'valid' or 'same', 'valid': 不进行补充, 'same': 补足. default 'valid'
+        :param padding: 'valid', 'same', 'tiny-same', 'valid': 不进行补充, 'same': 补足. default 'valid'
         :param padding_value: float
         """
         super(MaxPool2D, self).__init__(
             kernel_size=kernel_size,
             stride=stride,
-            padding=(kernel_size - 1) // 2 if padding == 'same' and padding_value == 0. else 0)
-        self.pad = None
-        if padding == 'same':  # Padding
-            if kernel_size == 2 and stride == 1:
-                self.pad = nn.ZeroPad2d((0, 1, 0, 1))  # l, r, t, b; yoloV3-tiny
-            elif padding_value != 0.:
-                self.pad = nn.ConstantPad2d((kernel_size - 1) // 2, padding_value)
+            padding=auto_padding(kernel_size, padding, padding_value))
+        self.pad = pad(kernel_size, padding, stride, padding_value)
 
     def forward(self, x):
         return super().forward(self.pad(x) if self.pad else x)
@@ -117,7 +147,7 @@ class MaxPool2D(nn.MaxPool2d):
         return super(MaxPool2D, self)._forward_unimplemented(*input)
 
 
-class MixConv2d(base_model):  # MixConv: Mixed Depthwise Convolutional Kernels https://arxiv.org/abs/1907.09595
+class MixConv2d(Layer):  # MixConv: Mixed Depthwise Convolutional Kernels https://arxiv.org/abs/1907.09595
     def __init__(self, in_ch, out_ch, kernel_size=(3, 5, 7), stride=1, dilation=1, bias=True, method='equal_params'):
         super(MixConv2d, self).__init__()
 
@@ -144,6 +174,54 @@ class MixConv2d(base_model):  # MixConv: Mixed Depthwise Convolutional Kernels h
 
     def forward(self, x):
         return torch.cat([m(x) for m in self.m], 1)
+
+
+class Conv(Layer):
+    def __init__(self, in_channels, out_channels, kernel_size=1, stride=1, padding='valid', groups=1, bias=True,
+                 bn=False, act='valid', pool=False, pool_size=1, pool_stride=1, **kwargs):
+        """Conv
+            Conv2d, BatchNormal, Activation, Pooling
+
+        Args:
+            act: default 'valid', 'relu', 'leaky', 'selu'. all activation has parameter 'inplace' default False;
+             leaky parameter: 'negativate_slope' default 1e-2.
+        """
+        super(Conv, self).__init__()
+        self.add_module('Conv2d', nn.Conv2d(
+            in_channels, out_channels, kernel_size, stride,
+            auto_padding(kernel_size, padding), groups=groups, bias=not bn and bias))
+        if bn:  # BatchNormal
+            self.add_module('bn', nn.BatchNorm2d(out_channels))
+        if 'valid' == act:  # Activation
+            self.add_module('act', Activation(act, **kwargs))
+        if pool:  # Pooling
+            self.add_module('MaxPool2D', MaxPool2D(pool_size, pool_stride, padding))
+        pass
+
+
+class Dense(Layer):
+    def __init__(self, in_channels, out_channels, activation=None, bias=True):
+        super(Dense, self).__init__()
+        self.add_module('linear', nn.Linear(in_channels, out_channels, bias))
+        if isinstance(activation, str):
+            self.add_module('act', Activation(activation))
+        elif isinstance(activation, nn.Module):
+            self.add_module('act', activation)
+
+
+class FeatureExtractor(Layer):
+    def __init__(self, **kwargs):
+        """FeatureExtractor
+            C, B, A, P, D
+
+        Args:
+
+        Returns:
+            None
+        """
+        super(FeatureExtractor, self).__init__()
+
+        pass
 
 
 # Activation functions below -------------------------------------------------------------------------------------------

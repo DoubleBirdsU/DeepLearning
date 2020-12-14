@@ -1,3 +1,5 @@
+from typing import List, Union
+
 from torch import nn
 
 
@@ -7,6 +9,85 @@ class base_model(nn.Module):
 
     def get_index(self, class_name):
         if isinstance(class_name, str):
-            return [i for i, module in enumerate(self.module_list) if module.__class__.__name__ == class_name]
+            return [i for i, module in enumerate(self.modules_list) if module.__class__.__name__ == class_name]
         else:
-            return [i for i, module in enumerate(self.module_list) if isinstance(module, class_name)]
+            return [i for i, module in enumerate(self.modules_list) if isinstance(module, class_name)]
+
+
+class Module(base_model):
+    def __init__(self):
+        super(Module, self).__init__()
+        self._layers: List[Module] = list()
+        self.in_ch_first = None
+        self.out_ch_last = None
+        self.modules_list = nn.ModuleList()
+
+    def forward(self, *args, **kwargv):
+        x = args[0]
+        for layer in self._layers:
+            x = layer(x)
+        return x
+
+    def addLayers(self, layers):
+        if isinstance(layers, list):
+            self._layers += layers
+        elif isinstance(layers, nn.Module):
+            self._layers.append(layers)
+
+    def getLayers(self):
+        return self._layers
+
+    def get_modules(self, reset=True):
+        if reset:
+            self.modules_list = nn.ModuleList()
+            self.collect_layers(self._layers)
+        return self.modules_list
+
+    def add_module(self, name, module):
+        super(Module, self).add_module(name, module)
+        self.addLayers(module)
+
+    def collect_layers(self, layers, bool_in=False, bool_out=False):
+        r"""Collect Layers
+
+        Args:
+            layers: Union[List[Module], Module]
+            bool_in:
+            bool_out:
+
+        Returns:
+            None
+        """
+        self._init_in_ch_first(layers, bool_in)
+        self._collect_layers(layers, bool_out)
+
+    def _collect_layers(self, modules, bool_out=False):
+        if isinstance(modules, Module):
+            self._collect_layers(modules._layers, bool_out)
+            self._init_out_ch_last(modules, bool_out)
+        elif isinstance(modules, nn.Module):
+            self.modules_list.append(modules)
+        elif isinstance(modules, nn.ModuleList):
+            self.modules_list += modules
+        elif isinstance(modules, nn.Module):
+            self.add_module(modules.__class__.__name__, modules)
+        elif isinstance(modules, list):
+            for module in modules:
+                self._collect_layers(module, bool_out)
+
+    def _init_in_ch_first(self, modules, bool_in=False):
+        if isinstance(self, Module) and (bool_in or self.in_ch_first):
+            pass
+        elif isinstance(modules, Module):
+            self.in_ch_first = modules.in_ch_first
+        elif isinstance(modules, nn.Module) and hasattr(modules, 'weight') and modules.weight.ndim > 1:
+            self.in_ch_first = modules.weight.shape[1]
+        elif isinstance(modules, list) or isinstance(modules, nn.Sequential):
+            for module in modules:
+                self._init_in_ch_first(module, bool_in)
+                if isinstance(self, Module) and self.in_ch_first:
+                    break
+
+    def _init_out_ch_last(self, modules, bool_out=False):
+        if not bool_out:
+            self.out_ch_last = modules.out_ch_last

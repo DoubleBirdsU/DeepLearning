@@ -67,7 +67,7 @@ def train(hyper):
     if isinstance(model, YOLOV3_SPP):
         weights = './weights/yolov3-spp-ultralytics-512.pt'
     else:
-        weights = './weights/yolov3spp-0.pt'
+        weights = './weights/yolov3spp.pt'
     if isinstance(model, YOLOV3_SPP) and False:
         if opt.freeze_layers:
             # 索引减一对应的是predictor的索引，YOLOLayer并不是predictor
@@ -105,7 +105,7 @@ def train(hyper):
         epochs, start_epoch = loadCKPT(model, optimizer, epochs, weights, results_file, device, True)
 
     train_loader = None
-    bool_trainer = False
+    bool_trainer = True
     num_workers = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 8])  # number of workers
 
     # dataset
@@ -118,7 +118,7 @@ def train(hyper):
                                   pin_memory=True)
 
     # 验证集的图像尺寸指定为 img_size(512)
-    test_loader = dataLoader(test_path, img_size_test, batch_size, True, hyper,
+    test_loader = dataLoader(test_path, img_size_test, 1, True, hyper,
                              cache_images=opt.cache_images,
                              single_cls=opt.single_cls,
                              num_workers=num_workers,

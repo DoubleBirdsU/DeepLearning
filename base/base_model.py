@@ -1,5 +1,3 @@
-from typing import List, Union
-
 from torch import nn
 
 
@@ -17,30 +15,23 @@ class base_model(nn.Module):
 class Module(base_model):
     def __init__(self):
         super(Module, self).__init__()
-        self._layers: List[Module] = list()
         self.in_ch_first = None
         self.out_ch_last = None
         self.modules_list = nn.ModuleList()
 
     def forward(self, *args, **kwargv):
         x = args[0]
-        for layer in self._layers:
+        for layer in self.modules_list:
             x = layer(x)
         return x
 
     def addLayers(self, layers):
-        if isinstance(layers, list):
-            self._layers += layers
-        elif isinstance(layers, nn.Module):
-            self._layers.append(layers)
+        self.collect_layers(layers, bool_in=True, bool_out=True)
 
     def getLayers(self):
-        return self._layers
+        return self.modules_list
 
-    def get_modules(self, reset=True):
-        if reset:
-            self.modules_list = nn.ModuleList()
-            self.collect_layers(self._layers)
+    def get_modules(self):
         return self.modules_list
 
     def add_module(self, name, module):
@@ -62,21 +53,19 @@ class Module(base_model):
         self._collect_layers(layers, bool_out)
 
     def _collect_layers(self, modules, bool_out=False):
-        if isinstance(modules, Module):
-            self._collect_layers(modules._layers, bool_out)
+        if modules is None:
+            pass
+        elif isinstance(modules, Module) and len(modules.modules_list) != 0:
+            self._collect_layers(modules.modules_list, bool_out)
             self._init_out_ch_last(modules, bool_out)
-        elif isinstance(modules, nn.Module):
-            self.modules_list.append(modules)
-        elif isinstance(modules, nn.ModuleList):
-            self.modules_list += modules
-        elif isinstance(modules, nn.Module):
-            self.add_module(modules.__class__.__name__, modules)
-        elif isinstance(modules, list):
+        elif isinstance(modules, nn.ModuleList) or isinstance(modules, nn.Sequential) or isinstance(modules, list):
             for module in modules:
                 self._collect_layers(module, bool_out)
+        elif isinstance(modules, nn.Module):
+            self.modules_list.append(modules)
 
     def _init_in_ch_first(self, modules, bool_in=False):
-        if isinstance(self, Module) and (bool_in or self.in_ch_first):
+        if modules is None or (isinstance(self, Module) and (bool_in or self.in_ch_first)):
             pass
         elif isinstance(modules, Module):
             self.in_ch_first = modules.in_ch_first

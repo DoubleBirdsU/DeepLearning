@@ -1,6 +1,5 @@
 import torch
-import math
-import torch.nn.functional as F
+import pickle
 import torch.optim as optim
 
 from torch import nn
@@ -8,137 +7,16 @@ from torch.utils.data import DataLoader
 
 from base.base_model import base_model, Module
 from base.blocks import AlexBlock, VGGBlock
-from base.layers import FeatureConcat, WeightedFeatureFusion, MaxPool2D, Dense, Flatten, Conv
+from base.layers import MaxPool2D, Dense, Flatten, FeatureExtractor
 from base.utils import print_cover
 
 ONNX_EXPORT = False
+DEFAULT_PROTOCOL = 2
 
 
 class Model(base_model):
     def __init__(self):
         super(Model, self).__init__()
-
-    @staticmethod
-    def create_modules(modules_def, img_size, cfg):
-        """Constructs module list of layer blocks from module configuration in module_def
-
-        Param:
-            modules_def: 模型定义
-            img_size: 图片尺寸
-            cfg: 配置文件
-
-        Returns:
-            模型
-        """
-
-        img_size = [img_size] * 2 if isinstance(img_size, int) else img_size
-        modules_def.pop(0)  # cfg training hyperparams (unused)
-        channels = [3]  # input channels
-        filters = 64
-        module_list = nn.ModuleList()
-        routs = []  # list of layers which rout to deeper layers
-        yolo_index = -1
-        idx = -1
-
-        for idx, layer_def in enumerate(modules_def):
-            modules = nn.Sequential()
-
-            if layer_def["type"] == "convolutional":
-                modules, filters, bn = Model._make_conv(layer_def, channels[-1])
-                if not bn:
-                    routs.append(idx)
-            elif layer_def["type"] == "BatchNorm2d":
-                pass
-            elif layer_def["type"] == "maxpool":
-                modules = MaxPool2D(kernel_size=layer_def["size"], stride=layer_def["stride"], padding='same')
-            elif layer_def["type"] == "upsample":
-                if ONNX_EXPORT:  # explicitly state size, avoid scale_factor
-                    g = (yolo_index + 1) * 2 / 32  # gain
-                    modules = nn.Upsample(size=tuple(int(x * g) for x in img_size))
-                else:
-                    modules = nn.Upsample(scale_factor=layer_def["stride"])
-            elif layer_def["type"] == "route":  # [-2],  [-1,-3,-5,-6]
-                layers = layer_def["layers"]
-                filters = sum([channels[l + 1 if l > 0 else l] for l in layers])
-                routs.extend([idx + l if l < 0 else l for l in layers])
-                modules = FeatureConcat(layers=layers)
-            elif layer_def["type"] == "shortcut":
-                layers = layer_def["from"]
-                filters = channels[-1]
-                routs.extend([idx + l if l < 0 else l for l in layers])
-                modules = WeightedFeatureFusion(layers=layers, weight="weights_type" in layer_def)
-            elif layer_def["type"] == "reorg3d":
-                pass
-            elif layer_def["type"] == "yolo":
-                yolo_index += 1
-                modules = Model._make_yolo_layer(layer_def, yolo_index, cfg, img_size, module_list)
-            elif layer_def["type"] == "dropout":
-                modules = nn.Dropout(p=float(layer_def["probability"]))
-            else:
-                print("Warning: Unrecognized Layer Type: " + layer_def["type"])
-
-            # Register module list and number of output filters
-            module_list.append(modules)
-            channels.append(filters)
-
-        routs_binary = [False] * (idx + 1)
-        for idx in routs:
-            routs_binary[idx] = True
-        return module_list, routs_binary
-
-    @staticmethod
-    def _make_conv(model_cfg, in_ch=None):
-        modules = nn.Sequential()
-
-        bn = model_cfg['batch_normalize']  # 1 or 0 / use or not
-        filters = model_cfg['filters']  # out_channels
-        kernel_size = model_cfg['size']  # kernel size
-        stride = model_cfg['stride'] if 'stride' in model_cfg else (model_cfg['stride_y'], model_cfg['stride_x'],)
-        padding = kernel_size // 2 if model_cfg['pad'] else 0
-        groups = model_cfg['groups'] if 'groups' in model_cfg else 1
-        activation = model_cfg['activation'] if 'activation' in model_cfg else 'relu'
-
-        if isinstance(kernel_size, int):
-            modules.add_module(
-                "Conv2d", nn.Conv2d(
-                    in_channels=in_ch, out_channels=filters, kernel_size=kernel_size,
-                    stride=stride, padding=padding, groups=groups, bias=not bn))
-
-        # 如果该卷积操作没有bn层，意味着该层为yolo的predictor
-        if bn:
-            modules.add_module('BatchNorm2d', nn.BatchNorm2d(filters))
-
-        # 激活函数 activation
-        if activation == 'leaky':
-            modules.add_module('activation', nn.LeakyReLU(0.1, inplace=True))
-        elif activation == 'relu':
-            modules.add_module('activation', nn.ReLU(inplace=True))
-
-        return modules, filters, bn
-
-    @staticmethod
-    def _make_yolo_layer(mdef, yolo_index, cfg, img_size, module_list):
-        stride = [32, 16, 8]
-        if any(x in cfg for x in ["panet", "yolo4", "cd53"]):
-            stride = list(reversed(stride))
-        layers = mdef["from"] if "from" in mdef else []
-        modules = YOLOLayer(anchors=mdef["anchors"][mdef["mask"]], num_classes=mdef["classes"], img_size=img_size,
-                            yolo_index=yolo_index, layers=layers, stride=stride[yolo_index])
-
-        # Initialize preceding Conv2d() bias (https://arxiv.org/pdf/1708.02002.pdf section 3.3)
-        try:
-            j = layers[yolo_index] if 'from' in mdef else -1
-            # If previous layer is a dropout layer, get the one before
-            if module_list[j].__class__.__name__ == 'Dropout':
-                j -= 1
-            bias_ = module_list[j][0].bias  # shape(255,)
-            bias = bias_[:modules.num_outputs * modules.num_anchors].view(modules.num_anchors, -1)  # shape(3,85)
-            bias[:, 4] += -4.5  # obj
-            bias[:, 5:] += math.log(0.6 / (modules.num_classes - 0.99))  # cls (sigmoid(p) = 1/num_classes)
-            module_list[j][0].bias = torch.nn.Parameter(bias_, requires_grad=bias_.requires_grad)
-        except Exception:
-            print('WARNING: smart bias initialization failure.')
-        return modules
 
 
 class NNet(Module):
@@ -167,55 +45,87 @@ class NNet(Module):
         self.metrics = metrics
         self.device = device
 
-    def fit_generator(self, train_data, epochs, batch_size=1, validate_data=None, print_grad=1):
+    def fit_generator(self,
+                      train_data=None,
+                      batch_size=None,
+                      epochs=1,
+                      verbose=1,
+                      callbacks=None,
+                      validation_split=0.0,
+                      validation_data=None,
+                      shuffle=True,
+                      class_weight=None,
+                      sample_weight=None,
+                      initial_epoch=0,
+                      steps_per_epoch=None,
+                      validation_steps=None,
+                      validation_batch_size=None,
+                      validation_freq=1,
+                      max_queue_size=10,
+                      workers=1,
+                      use_multiprocessing=False):
         """fit_generator
 
         Args:
             train_data (DataLoader):
-            epochs:
-            batch_size:
-            validate_data (DataLoader):
-            print_grad:
+            batch_size ():
+            epochs ():
+            verbose ():
+            callbacks ():
+            validation_split ():
+            validation_data (DataLoader):
+            shuffle ():
+            class_weight ():
+            sample_weight ():
+            initial_epoch ():
+            steps_per_epoch ():
+            validation_steps ():
+            validation_batch_size ():
+            validation_freq ():
+            max_queue_size ():
+            workers ():
+            use_multiprocessing ():
 
         Returns:
             None
         """
-        print(f'Train on {len(train_data.dataset)} samples, validate on {len(validate_data.dataset)} samples')
+        print(f'Train on {len(train_data.dataset)} samples, validate on {len(validation_data.dataset)} samples')
         for epoch in range(1, epochs + 1):
             print(f'Epoch {epoch}/{epochs}:')
-            self.train_once(train_data, print_grad)
-            self.valid_once(validate_data)
+            self.train_once(train_data, batch_size)
+            if epoch % validation_freq == 0 or epoch == epochs:
+                self.valid_once(validation_data)
 
-    def train_once(self, train_loader, print_grad):
+    def train_once(self, train_loader, batch_size):
         """train_once
 
         Args:
             train_loader:
-            print_grad:
+            batch_size:
 
         Returns:
             None
         """
         self.train()
         correct = 0
-        loss_mean = 0.0
         num_data = 0
+        loss_mean = 0.0
         count_data = len(train_loader.dataset)
+        count_batch = (count_data + batch_size - 1) // batch_size
         for batch_idx, (data, y_true) in enumerate(train_loader):
-            num_data += len(data)
             data, y_true = data.to(self.device), y_true.to(self.device)
             self.optimizer.zero_grad()
             y_pred = self(data)
             loss = self.loss(y_pred, y_true)
-            loss_mean = (loss_mean * batch_idx + loss) / (batch_idx + 1)
             loss.backward()
             self.optimizer.step()
 
+            # 输出信息
+            num_data += len(data)
+            loss_mean = (loss_mean * batch_idx + loss) / (batch_idx + 1)
             correct += self._get_correct(y_pred, y_true) if self.metrics else 0.
-            if batch_idx % print_grad == 0 or num_data == count_data:
-                schedule = self._get_schedule(1. * num_data / count_data)
-                msg = self._make_msg(loss, 1. * correct / num_data, prefix='')
-                print_cover(f'{num_data}/{count_data} {schedule}{msg}')
+            msg = self._print_cover(loss_mean, correct, num_data, batch_idx + 1, count_batch)
+            print_cover(msg)
 
     def valid_once(self, valid_loader):
         self.eval()
@@ -228,9 +138,9 @@ class NNet(Module):
                 loss_mean += self.loss(y_pred, y_true, reduction='sum').item()  # sum up batch loss
                 correct += self._get_correct(y_pred, y_true) if self.metrics else 0.
 
+        # 输出信息
         loss_mean /= len(valid_loader.dataset)
-        count_data = len(valid_loader.dataset)
-        print(self._make_msg(loss_mean, 1. * correct / count_data, 'val_'))
+        print(self._make_msg(loss_mean, 1. * correct / len(valid_loader.dataset), 'val_'))
 
     def get_parameters(self, opt_type='adam', call_params=None, **kwargs):
         if call_params is None:
@@ -260,6 +170,31 @@ class NNet(Module):
         self.optimizer.add_param_group({'params': opg_bn})
         del opg_bn, opg_weight, opg_bias
         return self.optimizer
+
+    def save(self, f, pickle_module=pickle, pickle_protocol=DEFAULT_PROTOCOL, _use_new_zipfile_serialization=True):
+        torch.save(self.state_dict(), f, pickle_module, pickle_protocol, _use_new_zipfile_serialization)
+
+    @staticmethod
+    def get_channels(channels, in_shape, down_size=32, channels_bias=0, shape_bias=0):
+        """get_channels
+
+        Args:
+            channels:
+            in_shape:
+            down_size (Union[int, tuple]):
+            channels_bias (Union[int, tuple]):
+            shape_bias (Union[int, tuple]):
+
+        Returns:
+            channels
+        """
+        return channels * ((torch.Tensor(in_shape).int() + down_size - 1 - shape_bias) //
+                           down_size - channels_bias).prod()
+
+    def _print_cover(self, loss, correct, count_data, cur_batch, count_batch):
+        schedule = self._get_schedule(1. * cur_batch / count_batch)
+        msg = self._make_msg(loss, 1. * correct / count_data, prefix='')
+        return f'{cur_batch}/{count_batch} {schedule}{msg}'
 
     def _make_msg(self, loss, accuracy=.0, prefix=''):
         msg = ' - {}loss: {:.6f}'.format(prefix, loss)
@@ -293,154 +228,71 @@ class LeNet(NNet):
             None
         """
         super(LeNet, self).__init__()
-        self.conv1 = Conv(img_size[0], 6, 5)  # 1x28x28 -> 6x24x24
-        self.conv2 = Conv(6, 6, 5)  # 6x24x24 -> 6x20x20
-        self.conv3 = Conv(6, 16, 5, stride=2)  # 6x20x20 -> 16x8x8 (n + 1) // 2 - 6
-        self.conv4 = Conv(16, 16, 5, stride=2)  # 16x8x8 -> 16x2x2 (n + 3) // 4 - 5
-        self.flatten = Flatten()  # 16x2x2 -> 64
-        self.fc1 = Dense(16 * ((torch.Tensor(img_size[1:]).int() + 3) // 4 - 5).prod(), 120, 'sigmoid')
-        self.fc2 = Dense(120, 84, 'sigmoid')
-        self.fc3 = Dense(84, num_cls)
-        self.softmax = nn.Softmax(dim=-1)
-        self.addLayers([self.conv1, self.conv2, self.conv3, self.conv4,
-                        self.flatten, self.fc1, self.fc2, self.fc3, self.softmax])
+        self.addLayers([
+            FeatureExtractor(img_size[0], 6, 5),  # 1x28x28 -> 6x24x24
+            FeatureExtractor(6, 6, 5),  # 6x24x24 -> 6x20x20
+            FeatureExtractor(6, 16, 5, stride=2),  # 6x20x20 -> 16x8x8 (n + 1) // 2 - 6
+            FeatureExtractor(16, 16, 5, stride=2),  # 16x8x8 -> 16x2x2 (n + 3) // 4 - 5
+            Flatten(),  # 16x2x2 -> 64
+            Dense(self.get_channels(16, img_size[1:], 4, 5), 120, 'sigmoid'),
+            Dense(120, 84, 'sigmoid'),
+            Dense(84, num_cls),
+            nn.Softmax(dim=-1),
+        ])
 
 
 class AlexNet(NNet):
     def __init__(self, num_cls=1000, img_size=(3, 224, 224)):
         super(AlexNet, self).__init__()
-        self.alex1 = AlexBlock((img_size[0], 48), (48, 128), (11, 5), (4, 1), pool=True)
-        self.alex2 = AlexBlock((256, 192, 192), (192, 192, 128), 3, 1)
-        self.pool = MaxPool2D(3, 1, 'same')
-        self.flatten = Flatten()
-        self.fc1 = Dense(256 * 13 * 13, 4096, 'relu')
-        self.fc2 = Dense(4096, 4096, 'relu')
-        self.fc3 = Dense(4096, num_cls)
-        self.softmax = nn.Softmax(dim=-1)
-        self.addLayers([self.alex1, self.alex2, self.pool, self.flatten,
-                        self.fc1, self.fc2, self.fc3, self.softmax])
+        self.addLayers([
+            AlexBlock((img_size[0], 48), (48, 128), (11, 5), (4, 1), pool=True),
+            AlexBlock((256, 192, 192), (192, 192, 128), 3, 1),
+            MaxPool2D(3, 1, 'same'),
+            Flatten(),
+            Dense(256 * 13 * 13, 4096, 'relu'),
+            Dense(4096, 4096, 'relu'),
+            Dense(4096, num_cls),
+            nn.Softmax(dim=-1),
+        ])
 
 
 class VGG16(NNet):
     def __init__(self, num_cls=1000, img_size=(3, 224, 224)):
         super(VGG16, self).__init__()
-        self.vggb1 = VGGBlock(img_size[0], 64)
-        self.pool1 = MaxPool2D(3, stride=2, padding='same')
-        self.vggb2 = VGGBlock(64, 128)
-        self.pool2 = MaxPool2D(3, stride=2, padding='same')
-        self.vggb3 = VGGBlock(128, 256)
-        self.pool3 = MaxPool2D(3, stride=2, padding='same')
-        self.vggb4 = VGGBlock(256, 512)
-        self.pool4 = MaxPool2D(3, stride=2, padding='same')
-        self.vggb5 = VGGBlock(512, 512)
-        self.pool5 = MaxPool2D(3, stride=2, padding='same')
-        self.flatten = Flatten()
-        self.fc1 = Dense(512 * ((torch.Tensor(img_size[1:]).int() +  + 31) // 32).prod(), 4096, 'relu')
-        self.fc2 = Dense(4096, 4096, 'relu')
-        self.fc3 = Dense(4096, num_cls)
-        self.softmax = nn.Softmax(dim=-1)
         self.addLayers([
-            self.vggb1, self.pool1, self.vggb2, self.pool2, self.vggb3, self.pool3, self.vggb4,
-            self.pool4, self.vggb5, self.pool5, self.flatten, self.fc1, self.fc2, self.fc3, self.softmax,
+            VGGBlock(img_size[0], 64, pool=True, kernel_size=3, stride=2),
+            VGGBlock(64, 128, pool=True, kernel_size=3, stride=2),
+            VGGBlock(128, 256, num_layer=3, pool=True, kernel_size=3, stride=2),
+            VGGBlock(256, 512, num_layer=3, pool=True, kernel_size=3, stride=2),
+            VGGBlock(512, 512, num_layer=3, pool=True, kernel_size=3, stride=2),
+            Flatten(),
+            Dense(512 * ((torch.Tensor(img_size[1:]).int() + 31) // 32).prod(), 512, 'relu'),
+            Dense(512, 512, 'relu'),
+            Dense(512, num_cls),
+            nn.Softmax(dim=-1),
         ])
 
 
-# YOLOLayer
-class YOLOLayer(base_model):
-    """对YOLO的输出进行处理
-    """
-
-    def __init__(self, anchors, num_classes, img_size, yolo_index, layers, stride):
-        super(YOLOLayer, self).__init__()
-        self.anchors = torch.Tensor(anchors)
-        self.index = yolo_index  # index of this layer in layers
-        self.layers = layers  # model output layer indices
-        self.stride = stride  # layer stride 特征图上一步对应原图上的步距 [32, 16, 8]
-        self.num_layers = len(layers)  # number of output layers (3)
-        self.num_anchors = len(anchors)  # number of anchors (3)
-        self.num_classes = num_classes  # number of classes (80)
-        self.num_outputs = num_classes + 5  # number of outputs (85)
-        self.nx, self.ny, self.ng = 0, 0, 0  # initialize number of x, y gridpoints
-        self.anchor_vec = self.anchors / self.stride
-        self.anchor_wh = self.anchor_vec.view(1, self.num_anchors, 1, 1, 2)
-        self.grid = None
-
-        if ONNX_EXPORT:
-            self.training = False
-            self.create_grids((img_size[1] // stride, img_size[0] // stride))  # number x, y grid points
-
-    def create_grids(self, ng=(13, 13), device="cpu"):
-        """生成 grids
-
-        Param:
-            ng: 特征图大小
-            device:
-
-        Returns:
-
-        """
-        self.nx, self.ny = ng
-        self.ng = torch.tensor(ng, dtype=torch.float)
-
-        # build xy offsets 构建每个cell处的anchor的xy偏移量(在feature map上的)
-        if not self.training:  # 训练模式不需要回归到最终预测boxes
-            yv, xv = torch.meshgrid([torch.arange(self.ny, device=device),
-                                     torch.arange(self.nx, device=device)])
-            self.grid = torch.stack((xv, yv), 2).view((1, 1, self.ny, self.nx, 2)).float()
-
-        if self.anchor_vec.device != device:
-            self.anchor_vec = self.anchor_vec.to(device)
-            self.anchor_wh = self.anchor_wh.to(device)
-
-    def forward(self, x, out):
-        bool_ASFF = False  # https://arxiv.org/abs/1911.09516
-        if bool_ASFF:
-            i, n = self.index, self.num_layers  # index in layers, number of layers
-            x = out[self.layers[i]]
-            bs, _, ny, nx = x.shape  # bs, 255, 13, 13
-            if (self.nx, self.ny) != (nx, ny):
-                self.create_grids((nx, ny), x.device)
-
-            # outputs and weights
-            w = torch.sigmoid(x[:, -n:]) * (2 / n)  # sigmoid weights (faster)
-
-            # weighted bool_ASFF sum
-            x = out[self.layers[i]][:, :-n] * w[:, i:i + 1]
-            for j in range(n):
-                if j != i:
-                    x += w[:, j:j + 1] * \
-                         F.interpolate(out[self.layers[j]][:, :-n], size=[ny, nx], mode='bilinear', align_corners=False)
-
-        elif ONNX_EXPORT:
-            bs = 1  # batch size
-        else:
-            bs, _, ny, nx = x.shape  # batch_size, predict_param(255), grid(13), grid(13)
-            if (self.nx, self.ny) != (nx, ny) or hasattr(self, "grid") is False:  # fix num_outputs grid bug
-                self.create_grids((nx, ny), x.device)
-
-        # p.view(batch_size, 255, 13, 13) -> (batch_size, 3, 13, 13, 85)  # (bs, anchors, grid, grid, classes + xywh)
-        x = x.view(bs, self.num_anchors, self.num_outputs,
-                   self.ny, self.nx).permute(0, 1, 3, 4, 2).contiguous()  # prediction
-
-        if self.training:
-            return x
-        elif ONNX_EXPORT:
-            # Avoid broadcasting for ANE operations
-            m = self.num_anchors * self.nx * self.ny  # 3*
-            ng = 1. / self.ng.repeat(m, 1)
-            grid = self.grid.repeat(1, self.num_anchors, 1, 1, 1).view(m, 2)
-            anchor_wh = self.anchor_wh.repeat(1, 1, self.nx, self.ny, 1).view(m, 2) * ng
-
-            x = x.view(m, self.num_outputs)
-            x[:, :2] = (torch.sigmoid(x[:, 0:2]) + grid) * ng  # x, y
-            x[:, 2:4] = torch.exp(x[:, 2:4]) * anchor_wh  # width, height
-            x[:, 4:] = torch.sigmoid(x[:, 4:])
-            x[:, 5:] = x[:, 5:self.num_outputs] * x[:, 4:5]
-            return x
-        else:  # inference
-            io = x.clone()  # inference output
-            io[..., :2] = torch.sigmoid(io[..., :2]) + self.grid  # xy 计算在feature map上的xy坐标
-            io[..., 2:4] = torch.exp(io[..., 2:4]) * self.anchor_wh  # wh yolo method 计算在feature map上的wh
-            io[..., :4] *= self.stride  # 换算映射回原图尺度
-            torch.sigmoid_(io[..., 4:])
-            return io.view(bs, -1, self.num_outputs), x  # view [1, 3, 13, 13, 85] as [1, 507, 85]
+class VGG16_V2(NNet):
+    def __init__(self, num_cls=1000, img_size=(3, 224, 224)):
+        super(VGG16_V2, self).__init__()
+        self.addLayers([
+            FeatureExtractor(img_size[0], 64, 3, padding='same', bn=True, act='relu'),
+            FeatureExtractor(64, 64, 3, padding='same', bn=True, act='relu', pool=True, pool_size=3, pool_stride=2),
+            FeatureExtractor(64, 128, 3, padding='same', bn=True, act='relu'),
+            FeatureExtractor(128, 128, 3, padding='same', bn=True, act='relu', pool=True, pool_size=3, pool_stride=2),
+            FeatureExtractor(128, 256, 3, padding='same', bn=True, act='relu'),
+            FeatureExtractor(256, 256, 3, padding='same', bn=True, act='relu'),
+            FeatureExtractor(256, 256, 3, padding='same', bn=True, act='relu', pool=True, pool_size=3, pool_stride=2),
+            FeatureExtractor(256, 512, 3, padding='same', bn=True, act='relu'),
+            FeatureExtractor(512, 512, 3, padding='same', bn=True, act='relu'),
+            FeatureExtractor(512, 512, 3, padding='same', bn=True, act='relu', pool=True, pool_size=3, pool_stride=2),
+            FeatureExtractor(512, 512, 3, padding='same', bn=True, act='relu'),
+            FeatureExtractor(512, 512, 3, padding='same', bn=True, act='relu'),
+            FeatureExtractor(512, 512, 3, padding='same', bn=True, act='relu', pool=True, pool_size=3, pool_stride=2),
+            Flatten(),
+            Dense(self.get_channels(512, img_size[1:]), 512, 'relu'),
+            Dense(512, 512, 'relu'),
+            Dense(512, num_cls),
+            nn.Softmax(dim=-1),
+        ])

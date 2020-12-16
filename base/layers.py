@@ -176,24 +176,23 @@ class MixConv2d(Layer):  # MixConv: Mixed Depthwise Convolutional Kernels https:
         return torch.cat([m(x) for m in self.m], 1)
 
 
-class Conv(Layer):
+class FeatureExtractor(Layer):
     def __init__(self, in_channels, out_channels, kernel_size=1, stride=1, padding='valid', groups=1, bias=True,
-                 bn=False, act='valid', pool=False, pool_size=1, pool_stride=1, **kwargs):
-        """Conv
+                 bn=True, act='valid', pool=False, pool_size=1, pool_stride=1, **kwargs):
+        """FeatureExtractor
             Conv2d, BatchNormal, Activation, Pooling
 
         Args:
             act: default 'valid', 'relu', 'leaky', 'selu'. all activation has parameter 'inplace' default False;
              leaky parameter: 'negativate_slope' default 1e-2.
         """
-        super(Conv, self).__init__()
+        super(FeatureExtractor, self).__init__()
         self.add_module('Conv2d', nn.Conv2d(
             in_channels, out_channels, kernel_size, stride,
             auto_padding(kernel_size, padding), groups=groups, bias=not bn and bias))
         if bn:  # BatchNormal
             self.add_module('bn', nn.BatchNorm2d(out_channels))
-        if 'valid' == act:  # Activation
-            self.add_module('act', Activation(act, **kwargs))
+        self.add_module('act', Activation(act, **kwargs))  # Activation
         if pool:  # Pooling
             self.add_module('MaxPool2D', MaxPool2D(pool_size, pool_stride, padding))
         pass
@@ -209,44 +208,33 @@ class Dense(Layer):
             self.add_module('act', activation)
 
 
-class FeatureExtractor(Layer):
-    def __init__(self, **kwargs):
-        """FeatureExtractor
-            C, B, A, P, D
-
-        Args:
-
-        Returns:
-            None
-        """
-        super(FeatureExtractor, self).__init__()
-
-        pass
-
-
 # Activation functions below -------------------------------------------------------------------------------------------
 class SwishImplementation(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x):
-        ctx.save_for_backward(x)
+    def __init__(self, ctx):
+        super(SwishImplementation, self).__init__()
+        self.ctx = ctx
+
+    def forward(self, x, **kwargs):
+        self.ctx.save_for_backward(x, **kwargs)
         return x * torch.sigmoid(x)
 
-    @staticmethod
-    def backward(ctx, grad_output):
-        x = ctx.saved_tensors[0]
+    def backward(self, grad_output):
+        x = self.ctx.saved_tensors[0]
         sx = torch.sigmoid(x)  # sigmoid(ctx)
         return grad_output * (sx * (1 + x * (1 - sx)))
 
 
 class MishImplementation(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x, **kwargs):
-        ctx.save_for_backward(x, **kwargs)
+    def __init__(self, ctx):
+        super(MishImplementation, self).__init__()
+        self.ctx = ctx
+
+    def forward(self, x, **kwargs):
+        self.ctx.save_for_backward(x, **kwargs)
         return x.mul(torch.tanh(F.softplus(x)))  # x * tanh(ln(1 + exp(x)))
 
-    @staticmethod
-    def backward(ctx, grad_output, **kwargs):
-        x = ctx.saved_tensors[0]
+    def backward(self, grad_output):
+        x = self.ctx.saved_tensors[0]
         sx = torch.sigmoid(x)
         fx = F.softplus(x).tanh()
         return grad_output * (fx + x * sx * (1 - fx * fx))

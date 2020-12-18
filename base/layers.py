@@ -1,5 +1,3 @@
-from typing import Any
-
 import torch
 import math
 import numpy as np
@@ -24,7 +22,9 @@ def make_divisible(v, divisor):
 
 
 def auto_padding(kernel_size=0, padding='same', padding_value=0.):
-    return (kernel_size - 1) // 2 if 'same' in padding and padding_value == 0. else 0
+    if not isinstance(kernel_size, list) and not isinstance(kernel_size, tuple):
+        kernel_size = list([kernel_size])
+    return tuple((torch.Tensor(kernel_size).int() - 1).numpy() // 2) if 'same' in padding and padding_value == 0. else 0
 
 
 def pad(kernel_size=0, padding='same', stride=1, padding_value=0.):
@@ -38,16 +38,22 @@ def pad(kernel_size=0, padding='same', stride=1, padding_value=0.):
 
 
 def Activation(activation='relu', **kwargs):
+    if isinstance(activation, nn.Module):
+        return activation
+
     activation = activation.lower()
     if 'leaky' == activation:
         negativate_slope = 1e-2 if 'negativate_slope' not in kwargs else kwargs['negativate_slope']
-        inplace = False if 'inplace' not in kwargs else kwargs['inplace']
+        inplace = kwargs['inplace'] if 'inplace' in kwargs else False
         act = nn.LeakyReLU(negativate_slope, inplace)
     elif 'selu' == activation:
-        inplace = False if 'inplace' not in kwargs else kwargs['inplace']
+        inplace = kwargs['inplace'] if 'inplace' in kwargs else False
         act = nn.SELU(inplace)
     elif 'sigmoid' == activation:
         act = nn.Sigmoid()
+    elif 'softmax' == activation:
+        dim = kwargs['dim'] if 'dim' in kwargs else -1
+        act = nn.Softmax(dim)
     else:
         inplace = False if 'inplace' not in kwargs else kwargs['inplace']
         act = nn.ReLU(inplace)
@@ -143,9 +149,6 @@ class MaxPool2D(nn.MaxPool2d):
     def forward(self, x):
         return super().forward(self.pad(x) if self.pad else x)
 
-    def _forward_unimplemented(self, *input: Any) -> None:
-        return super(MaxPool2D, self)._forward_unimplemented(*input)
-
 
 class MixConv2d(Layer):  # MixConv: Mixed Depthwise Convolutional Kernels https://arxiv.org/abs/1907.09595
     def __init__(self, in_ch, out_ch, kernel_size=(3, 5, 7), stride=1, dilation=1, bias=True, method='equal_params'):
@@ -178,12 +181,12 @@ class MixConv2d(Layer):  # MixConv: Mixed Depthwise Convolutional Kernels https:
 
 class FeatureExtractor(Layer):
     def __init__(self, in_channels, out_channels, kernel_size=1, stride=1, padding='valid', groups=1, bias=True,
-                 bn=True, act='valid', pool=False, pool_size=1, pool_stride=1, **kwargs):
+                 bn=False, activation='valid', pool=False, pool_size=1, pool_stride=1, **kwargs):
         """FeatureExtractor
             Conv2d, BatchNormal, Activation, Pooling
 
         Args:
-            act: default 'valid', 'relu', 'leaky', 'selu'. all activation has parameter 'inplace' default False;
+            activation: default 'valid', 'relu', 'leaky', 'selu'. all activation has parameter 'inplace' default False;
              leaky parameter: 'negativate_slope' default 1e-2.
         """
         super(FeatureExtractor, self).__init__()
@@ -192,20 +195,17 @@ class FeatureExtractor(Layer):
             auto_padding(kernel_size, padding), groups=groups, bias=not bn and bias))
         if bn:  # BatchNormal
             self.add_module('bn', nn.BatchNorm2d(out_channels))
-        self.add_module('act', Activation(act, **kwargs))  # Activation
+        self.add_module('act', Activation(activation, **kwargs))  # Activation
         if pool:  # Pooling
             self.add_module('MaxPool2D', MaxPool2D(pool_size, pool_stride, padding))
         pass
 
 
 class Dense(Layer):
-    def __init__(self, in_channels, out_channels, activation=None, bias=True):
+    def __init__(self, in_channels, out_channels, activation=None, bias=True, **kwargs):
         super(Dense, self).__init__()
         self.add_module('linear', nn.Linear(in_channels, out_channels, bias))
-        if isinstance(activation, str):
-            self.add_module('act', Activation(activation))
-        elif isinstance(activation, nn.Module):
-            self.add_module('act', activation)
+        self.add_module('act', Activation(activation, **kwargs))
 
 
 # Activation functions below -------------------------------------------------------------------------------------------

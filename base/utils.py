@@ -1086,3 +1086,57 @@ def print_cover(*arg, **kwargs):
     if 'end' in kwargs:
         kwargs.pop('end')
     print('\r', *arg, **kwargs, end='', flush=True)
+
+
+class ModelPath(object):
+    logs_path = 'logs'
+    for i in range(7):
+        if os.path.exists(logs_path):
+            logs_path = logs_path + os.sep
+            break
+        logs_path = '..' + os.sep + logs_path
+
+    models_path = logs_path + 'models' + os.sep
+    fit_path = logs_path + 'fit' + os.sep
+    model_type = '.ckpt'
+
+    def __init__(self, root=None):
+        self.root = root
+
+    # 生成路径
+    @staticmethod
+    def generateFolderPath(folder, path):
+        """
+            :rtype: str
+            :type folder: str
+            :type path: str
+        """
+        return path + os.sep + folder + os.sep
+
+    # 生成文件名
+    @staticmethod
+    def generateName(file_name, filetype, path=None):
+        """
+            :rtype: str
+            :type file_name: str
+            :type filetype: str
+            :type path: str
+        """
+        return path + file_name + filetype
+
+    # 生成模型路径
+    def generateModelName(self, model_name, filetype=model_type):
+        """
+            :rtype: str
+            :type model_name: str
+            :type filetype: str
+        """
+        return self.generateName(model_name + '_model', filetype, self.generateFolderPath(model_name, ))
+
+    def generateWeightName(self, model_name, filetype='.txt'):
+        """
+            :rtype: str
+            :type model_name: str
+            :type filetype: str
+        """
+        return self.generateName(model_name + '_weights', filetype, self.generateFolderPath(model_name, ))

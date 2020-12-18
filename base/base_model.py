@@ -2,9 +2,6 @@ from torch import nn
 
 
 class base_model(nn.Module):
-    def _forward_unimplemented(self, *input) -> None:
-        return super(base_model, self)._forward_unimplemented(*input)
-
     def get_index(self, class_name):
         if isinstance(class_name, str):
             return [i for i, module in enumerate(self.modules_list) if module.__class__.__name__ == class_name]
@@ -19,7 +16,7 @@ class Module(base_model):
         self.out_ch_last = None
         self.modules_list = nn.ModuleList()
 
-    def forward(self, *args, **kwargv):
+    def forward(self, *args, **kwargs):
         x = args[0]
         for layer in self.modules_list:
             x = layer(x)

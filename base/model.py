@@ -1,14 +1,15 @@
+import os
+
+import yaml
 import torch
 import pickle
 import torch.optim as optim
 
 from torch import nn
-from torch.utils.data import DataLoader
-
 from base.base_model import base_model, Module
-from base.blocks import AlexBlock, VGGBlock
-from base.layers import MaxPool2D, Dense, Flatten, FeatureExtractor
-from base.utils import print_cover
+from base.blocks import AlexBlock, VGGBlock, InceptionBlock_v1B, InceptionBlock_v3B
+from base.layers import MaxPool2D, Dense, FeatureExtractor
+from base.utils import print_cover, ModelPath
 
 ONNX_EXPORT = False
 DEFAULT_PROTOCOL = 2
@@ -19,6 +20,124 @@ class Model(base_model):
         super(Model, self).__init__()
 
 
+class ModelCheckpoint(object):
+    Weight = 'weights'
+    Model = 'model'
+    All = 'all'
+    Last = 'last'
+    Best = 'best'
+    Index = 'index'
+    ckpt_filename = 'ckpt.yaml'
+
+    def __init__(
+            self, filepath,
+            save_weights_only=False,
+            save_best_only=False,
+            pickle_module=pickle,
+            pickle_protocol=DEFAULT_PROTOCOL,
+            _use_new_zipfile_serialization=True
+    ):
+        self.filepath = filepath
+        self.root_path = os.path.dirname(filepath)
+        self.save_weights_only = save_weights_only
+        self.save_best_only = save_best_only
+        self.pickle_module = pickle_module
+        self.pickle_protocol = pickle_protocol
+        self._use_new_zipfile_serialization = _use_new_zipfile_serialization
+
+        # ckpt
+        self.ckpt = self.check_ckpt_complete(self.ckpt_read(self.root_path, self.ckpt_filename))
+        self.accuracy_best = self.ckpt['accuracy'] if 'accuracy' in self.ckpt else 0
+        self.ckpt['filename'] = os.path.abspath(self.filepath)
+        self.ckpt['save_best_only'] = self.save_best_only
+
+    def __call__(self, net, **kwargs):
+        """
+            accuracy:
+
+        Args:
+            net (NNet):
+        """
+        acc_cur = kwargs.pop('accuracy') if 'accuracy' in kwargs else 0.  # 取出 accuracy 参数
+        if self.save_weights_only:  # parameters
+            f = net.state_dict()
+            self.ckpt['save_mode'] = self.Weight
+        else:  # model and parameters
+            f = net
+            self.ckpt['save_mode'] = self.Model
+
+        index_last = self.Last
+        index_best = self.Best
+        mode = None
+        if not self.save_best_only:
+            mode = '{}-of-{}_{:.4f}'.format(net.epoch, net.epochs, acc_cur)
+            index_last = self.Index
+
+        # Save last 存在问题: 如果新训练的覆盖了旧的概率模型
+        suffix_last = self.get_suffix(index=index_last, mode=mode)
+        file_last = self.filepath + suffix_last
+        acc_change = (self.accuracy_best < acc_cur or (self.save_best_only and not os.path.exists(file_last)))
+        torch.save(f, self.filepath + suffix_last, self.pickle_module, self.pickle_protocol,
+                   self._use_new_zipfile_serialization)
+
+        # Accuracy
+        suffix_best = self.ckpt['suffix_best'] if 'suffix_best' in self.ckpt else suffix_last
+        if acc_change:
+            suffix_best = suffix_last
+            self.accuracy_best = acc_cur
+
+        # Save best
+        if self.save_best_only:
+            suffix_best = self.get_suffix(index=index_best)
+            file_best = self.filepath + suffix_best
+            if acc_change or not os.path.exists(file_best):
+                torch.save(f, file_best, self.pickle_module, self.pickle_protocol,
+                           self._use_new_zipfile_serialization)
+
+        # Dump ckpt
+        self.ckpt['accuracy'] = self.accuracy_best
+        self.ckpt['suffix_best'] = suffix_best
+        self.ckpt['suffix_last'] = suffix_last
+        self.ckpt_dump(self.ckpt, os.path.join(self.root_path, self.ckpt_filename))
+
+    @staticmethod
+    def get_suffix(index='index', mode=None):
+        """
+        Args:
+            index: 'last', 'best', 'index'
+            mode:
+
+        Returns:
+            str
+        """
+        return (f'.{index}' if index else '') + (f'-{mode}' if mode else '')
+
+    @staticmethod
+    def ckpt_read(ckpt_path, ckpt_name='ckpt.yaml'):
+        ckpt_file = os.path.join(ckpt_path, ckpt_name)
+
+        ckpt = dict()
+        if os.path.exists(ckpt_file):
+            with open(ckpt_file, 'r', encoding='utf-8') as f:
+                ckpt = yaml.load(f.read(), Loader=yaml.SafeLoader)
+
+        return ckpt
+
+    @staticmethod
+    def ckpt_dump(ckpt, ckpt_path):
+        with open(ckpt_path, 'w', encoding='utf-8') as f:
+            yaml.dump(ckpt, f, Dumper=yaml.SafeDumper)
+    
+    @staticmethod
+    def check_ckpt_complete(ckpt):
+        if 'filename' in ckpt and 'suffix_best' in ckpt and 'suffix_last' in ckpt:
+            file_best = ckpt['filename'] + ckpt['suffix_best']
+            file_last = ckpt['filename'] + ckpt['suffix_last']
+            if os.path.exists(file_best) and os.path.exists(file_last):
+                return ckpt
+        return dict()
+
+
 class NNet(Module):
     def __init__(self):
         super(NNet, self).__init__()
@@ -26,6 +145,12 @@ class NNet(Module):
         self.loss = None
         self.device = None
         self.metrics = None
+        self.checkpoint_fn = None
+        self.epoch = 0
+        self.epochs = 0
+        self._callbacks = None
+        self._save_weights_only = False,
+        self._save_best_only = False,
         self._params_dict = dict()
 
     def compile(self, optimizer=None, loss=None, call_params=None, metrics=None, device=torch.device('cpu')):
@@ -45,25 +170,27 @@ class NNet(Module):
         self.metrics = metrics
         self.device = device
 
-    def fit_generator(self,
-                      train_data=None,
-                      batch_size=None,
-                      epochs=1,
-                      verbose=1,
-                      callbacks=None,
-                      validation_split=0.0,
-                      validation_data=None,
-                      shuffle=True,
-                      class_weight=None,
-                      sample_weight=None,
-                      initial_epoch=0,
-                      steps_per_epoch=None,
-                      validation_steps=None,
-                      validation_batch_size=None,
-                      validation_freq=1,
-                      max_queue_size=10,
-                      workers=1,
-                      use_multiprocessing=False):
+    def fit_generator(
+            self,
+            train_data=None,
+            batch_size=None,
+            epochs=1,
+            verbose=1,
+            callbacks=None,
+            validation_split=0.0,
+            validation_data=None,
+            shuffle=True,
+            class_weight=None,
+            sample_weight=None,
+            initial_epoch=0,
+            steps_per_epoch=None,
+            validation_steps=None,
+            validation_batch_size=None,
+            validation_freq=1,
+            max_queue_size=10,
+            workers=1,
+            use_multiprocessing=False
+    ):
         """fit_generator
 
         Args:
@@ -74,7 +201,7 @@ class NNet(Module):
             callbacks ():
             validation_split ():
             validation_data (DataLoader):
-            shuffle ():
+            shuffle (bool):
             class_weight ():
             sample_weight ():
             initial_epoch ():
@@ -84,17 +211,27 @@ class NNet(Module):
             validation_freq ():
             max_queue_size ():
             workers ():
-            use_multiprocessing ():
+            use_multiprocessing (bool):
 
         Returns:
             None
         """
+        self.epochs = epochs
+        self._callbacks = callbacks
+        self._make_callbacks(callbacks)
+
+        # Train
         print(f'Train on {len(train_data.dataset)} samples, validate on {len(validation_data.dataset)} samples')
         for epoch in range(1, epochs + 1):
             print(f'Epoch {epoch}/{epochs}:')
+            self.epoch = epoch
             self.train_once(train_data, batch_size)
             if epoch % validation_freq == 0 or epoch == epochs:
-                self.valid_once(validation_data)
+                _, acc_cur = self.valid_once(validation_data)
+
+                # checkpoint
+                if self.checkpoint_fn is not None:
+                    self.checkpoint_fn(self, accuracy=acc_cur)
 
     def train_once(self, train_loader, batch_size):
         """train_once
@@ -140,7 +277,9 @@ class NNet(Module):
 
         # 输出信息
         loss_mean /= len(valid_loader.dataset)
-        print(self._make_msg(loss_mean, 1. * correct / len(valid_loader.dataset), 'val_'))
+        val_acc = 1. * correct / len(valid_loader.dataset)
+        print(self._make_msg(loss_mean, val_acc, 'val_'))
+        return loss_mean, val_acc
 
     def get_parameters(self, opt_type='adam', call_params=None, **kwargs):
         if call_params is None:
@@ -171,8 +310,41 @@ class NNet(Module):
         del opg_bn, opg_weight, opg_bias
         return self.optimizer
 
-    def save(self, f, pickle_module=pickle, pickle_protocol=DEFAULT_PROTOCOL, _use_new_zipfile_serialization=True):
-        torch.save(self.state_dict(), f, pickle_module, pickle_protocol, _use_new_zipfile_serialization)
+    def save(
+            self, filepath,
+            save_weights_only=False,
+            save_best_only=False,
+            pickle_module=pickle,
+            pickle_protocol=DEFAULT_PROTOCOL,
+            _use_new_zipfile_serialization=True,
+            **kwargs
+    ):
+        """
+            checkpoint.yaml
+            model_name_weights.pt.last
+            model_name_weights.pt.best
+        """
+        # Parameters
+        self._save_weights_only = save_weights_only
+        self._save_best_only = save_best_only
+
+        # Save last, best
+        if save_weights_only:  # parameters
+            f = self.state_dict()
+            mode = ModelCheckpoint.Weight
+        else:  # model and parameters
+            f = self
+            mode = ModelCheckpoint.Model
+
+        if not save_best_only:
+            mode += f'_{self.epoch}-of-{self.epochs}'
+        else:
+            mode += f'_{ModelCheckpoint.Best}'
+
+        best = kwargs['best'] if 'best' in kwargs else False
+        if save_best_only and best:
+            filename_best = ModelCheckpoint.get_suffix(filepath, mode=mode)
+            torch.save(f, filename_best, pickle_module, pickle_protocol, _use_new_zipfile_serialization)
 
     @staticmethod
     def get_channels(channels, in_shape, down_size=32, channels_bias=0, shape_bias=0):
@@ -190,6 +362,14 @@ class NNet(Module):
         """
         return channels * ((torch.Tensor(in_shape).int() + down_size - 1 - shape_bias) //
                            down_size - channels_bias).prod()
+
+    def _make_callbacks(self, callbacks):
+        if callbacks is None:
+            return
+
+        for fn in callbacks:
+            if isinstance(fn, ModelCheckpoint):
+                self.checkpoint_fn = fn
 
     def _print_cover(self, loss, correct, count_data, cur_batch, count_batch):
         schedule = self._get_schedule(1. * cur_batch / count_batch)
@@ -233,11 +413,10 @@ class LeNet(NNet):
             FeatureExtractor(6, 6, 5),  # 6x24x24 -> 6x20x20
             FeatureExtractor(6, 16, 5, stride=2),  # 6x20x20 -> 16x8x8 (n + 1) // 2 - 6
             FeatureExtractor(16, 16, 5, stride=2),  # 16x8x8 -> 16x2x2 (n + 3) // 4 - 5
-            Flatten(),  # 16x2x2 -> 64
+            nn.Flatten(),  # 16x2x2 -> 64
             Dense(self.get_channels(16, img_size[1:], 4, 5), 120, 'sigmoid'),
             Dense(120, 84, 'sigmoid'),
-            Dense(84, num_cls),
-            nn.Softmax(dim=-1),
+            Dense(84, num_cls, activation='softmax'),
         ])
 
 
@@ -248,11 +427,10 @@ class AlexNet(NNet):
             AlexBlock((img_size[0], 48), (48, 128), (11, 5), (4, 1), pool=True),
             AlexBlock((256, 192, 192), (192, 192, 128), 3, 1),
             MaxPool2D(3, 1, 'same'),
-            Flatten(),
+            nn.Flatten(),
             Dense(256 * 13 * 13, 4096, 'relu'),
             Dense(4096, 4096, 'relu'),
-            Dense(4096, num_cls),
-            nn.Softmax(dim=-1),
+            Dense(4096, num_cls, activation='softmax'),
         ])
 
 
@@ -265,34 +443,62 @@ class VGG16(NNet):
             VGGBlock(128, 256, num_layer=3, pool=True, kernel_size=3, stride=2),
             VGGBlock(256, 512, num_layer=3, pool=True, kernel_size=3, stride=2),
             VGGBlock(512, 512, num_layer=3, pool=True, kernel_size=3, stride=2),
-            Flatten(),
+            nn.Flatten(),
             Dense(512 * ((torch.Tensor(img_size[1:]).int() + 31) // 32).prod(), 512, 'relu'),
             Dense(512, 512, 'relu'),
-            Dense(512, num_cls),
-            nn.Softmax(dim=-1),
+            Dense(512, num_cls, activation='softmax'),
         ])
 
 
-class VGG16_V2(NNet):
+class InceptionNet_v1B(NNet):
     def __init__(self, num_cls=1000, img_size=(3, 224, 224)):
-        super(VGG16_V2, self).__init__()
-        self.addLayers([
-            FeatureExtractor(img_size[0], 64, 3, padding='same', bn=True, act='relu'),
-            FeatureExtractor(64, 64, 3, padding='same', bn=True, act='relu', pool=True, pool_size=3, pool_stride=2),
-            FeatureExtractor(64, 128, 3, padding='same', bn=True, act='relu'),
-            FeatureExtractor(128, 128, 3, padding='same', bn=True, act='relu', pool=True, pool_size=3, pool_stride=2),
-            FeatureExtractor(128, 256, 3, padding='same', bn=True, act='relu'),
-            FeatureExtractor(256, 256, 3, padding='same', bn=True, act='relu'),
-            FeatureExtractor(256, 256, 3, padding='same', bn=True, act='relu', pool=True, pool_size=3, pool_stride=2),
-            FeatureExtractor(256, 512, 3, padding='same', bn=True, act='relu'),
-            FeatureExtractor(512, 512, 3, padding='same', bn=True, act='relu'),
-            FeatureExtractor(512, 512, 3, padding='same', bn=True, act='relu', pool=True, pool_size=3, pool_stride=2),
-            FeatureExtractor(512, 512, 3, padding='same', bn=True, act='relu'),
-            FeatureExtractor(512, 512, 3, padding='same', bn=True, act='relu'),
-            FeatureExtractor(512, 512, 3, padding='same', bn=True, act='relu', pool=True, pool_size=3, pool_stride=2),
-            Flatten(),
-            Dense(self.get_channels(512, img_size[1:]), 512, 'relu'),
+        super(InceptionNet_v1B, self).__init__()
+        self.net = nn.Sequential(
+            FeatureExtractor(img_size[0], 64, 3, padding='same', bn=True, activation='relu'),
+            InceptionBlock_v1B(64, 64),
+            FeatureExtractor(64, 128, 3, padding='same', bn=True, activation='relu'),
+            InceptionBlock_v1B(128, 128),
+            FeatureExtractor(128, 256, 3, padding='same', bn=True, activation='relu'),
+            FeatureExtractor(256, 256, 3, padding='same', bn=True, activation='relu'),
+            InceptionBlock_v1B(256, 256),
+            FeatureExtractor(256, 512, 3, padding='same', bn=True, activation='relu'),
+            FeatureExtractor(512, 512, 3, padding='same', bn=True, activation='relu'),
+            InceptionBlock_v1B(512, 512),
+            nn.Flatten(),
+            Dense(self.get_channels(512, img_size[1:], 16), 512, 'relu'),
             Dense(512, 512, 'relu'),
-            Dense(512, num_cls),
-            nn.Softmax(dim=-1),
-        ])
+            Dense(512, num_cls, activation='softmax'),
+        )
+        self.addLayers(self.net)
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class InceptionNet_v3B(NNet):
+    def __init__(self, num_cls=1000, img_size=(3, 224, 224)):
+        super(InceptionNet_v3B, self).__init__()
+        self.net = nn.Sequential(
+            FeatureExtractor(img_size[0], 64, 3, padding='same', bn=True, activation='relu'),
+            InceptionBlock_v3B(64, 64),
+            FeatureExtractor(64, 128, 3, padding='same', bn=True, activation='relu'),
+            InceptionBlock_v3B(128, 128),
+            FeatureExtractor(128, 256, 3, padding='same', bn=True, activation='relu'),
+            FeatureExtractor(256, 256, 3, padding='same', bn=True, activation='relu'),
+            InceptionBlock_v3B(256, 256),
+            FeatureExtractor(256, 512, 3, padding='same', bn=True, activation='relu'),
+            FeatureExtractor(512, 512, 3, padding='same', bn=True, activation='relu'),
+            InceptionBlock_v3B(512, 512),
+            nn.Flatten(),
+            Dense(self.get_channels(512, img_size[1:], 16), 512, activation='relu'),
+            Dense(512, num_cls, activation='softmax'),
+        )
+        self.addLayers(self.net)
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class ResNet(NNet):
+    def __init__(self, num_cls=1000, img_size=(3, 512, 512)):
+        super(ResNet, self).__init__()

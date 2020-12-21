@@ -3,6 +3,7 @@ import os
 import yaml
 import torch
 import pickle
+import dill
 import torch.optim as optim
 
 from torch import nn
@@ -33,7 +34,7 @@ class ModelCheckpoint(object):
             self, filepath,
             save_weights_only=False,
             save_best_only=False,
-            pickle_module=pickle,
+            pickle_module=dill,
             pickle_protocol=DEFAULT_PROTOCOL,
             _use_new_zipfile_serialization=True
     ):

@@ -87,10 +87,10 @@ class VGGPoolBlock(Module):
         """
         super(VGGPoolBlock, self).__init__()
         self.add_module('fe1', ConvSameBnRelu(in_ch, out_ch, 3))
-        if 3 >= num_layer:
+        if 3 <= num_layer:
             self.add_module('fe2', ConvSameBnRelu(out_ch, out_ch, 3))
         self.add_module(f'fe{num_layer}', ConvSameBnRelu(out_ch, out_ch, kernel_size))
-        self.add_module('max_pool', MaxPool2D(pool_size, pool_stride))
+        self.add_module('max_pool', MaxPool2D(pool_size, pool_stride, padding='same'))
 
 
 class ConcatBlock(Module):

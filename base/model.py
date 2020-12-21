@@ -7,9 +7,9 @@ import torch.optim as optim
 
 from torch import nn
 from base.base_model import base_model, Module
-from base.blocks import AlexBlock, VGGBlock, InceptionBlock_v1B, InceptionBlock_v3B
-from base.layers import MaxPool2D, Dense, FeatureExtractor
-from base.utils import print_cover, ModelPath
+from base.blocks import AlexBlock, VGGPoolBlock, InceptionBlock_v1B, InceptionBlock_v3B, ResConvBlock, ResBlockB
+from base.layers import MaxPool2D, Dense, FeatureExtractor, GlobalAvgPool2D
+from base.utils import print_cover
 
 ONNX_EXPORT = False
 DEFAULT_PROTOCOL = 2
@@ -127,7 +127,7 @@ class ModelCheckpoint(object):
     def ckpt_dump(ckpt, ckpt_path):
         with open(ckpt_path, 'w', encoding='utf-8') as f:
             yaml.dump(ckpt, f, Dumper=yaml.SafeDumper)
-    
+
     @staticmethod
     def check_ckpt_complete(ckpt):
         if 'filename' in ckpt and 'suffix_best' in ckpt and 'suffix_last' in ckpt:
@@ -438,11 +438,11 @@ class VGG16(NNet):
     def __init__(self, num_cls=1000, img_size=(3, 224, 224)):
         super(VGG16, self).__init__()
         self.addLayers([
-            VGGBlock(img_size[0], 64, pool=True, kernel_size=3, stride=2),
-            VGGBlock(64, 128, pool=True, kernel_size=3, stride=2),
-            VGGBlock(128, 256, num_layer=3, pool=True, kernel_size=3, stride=2),
-            VGGBlock(256, 512, num_layer=3, pool=True, kernel_size=3, stride=2),
-            VGGBlock(512, 512, num_layer=3, pool=True, kernel_size=3, stride=2),
+            VGGPoolBlock(img_size[0], 64, num_layer=2, pool_size=3, pool_stride=2),
+            VGGPoolBlock(64, 128, num_layer=2, pool_size=3, pool_stride=2),
+            VGGPoolBlock(128, 256, num_layer=3, pool_size=3, pool_stride=2),
+            VGGPoolBlock(256, 512, num_layer=3, pool_size=3, pool_stride=2),
+            VGGPoolBlock(512, 512, num_layer=3, pool_size=3, pool_stride=2),
             nn.Flatten(),
             Dense(512 * ((torch.Tensor(img_size[1:]).int() + 31) // 32).prod(), 512, 'relu'),
             Dense(512, 512, 'relu'),
@@ -501,4 +501,37 @@ class InceptionNet_v3B(NNet):
 
 class ResNet(NNet):
     def __init__(self, num_cls=1000, img_size=(3, 512, 512)):
+        """ResNet
+            ResNet18: [2, 2, 2, 2] ResBlockA
+
+            ResNet34: [3, 4, 6, 3] ResBlockA
+
+            ResNet50: [3, 4, 6, 3] ResBlockB
+
+            ResNet101: [3, 4, 23, 3] ResBlockB
+
+            ResNet152: [3, 8, 36, 3] ResBlockB
+
+        Args:
+            num_cls:
+            img_size:
+
+        Returns:
+            None
+        """
         super(ResNet, self).__init__()
+        self.net = list([
+            FeatureExtractor(img_size[0], 64, 7, stride=2, padding='same', bn=True, activation='relu'),
+            MaxPool2D(3, stride=2, padding='same'),
+            ResConvBlock(64, 256, 64, 3, ResBlockB),
+            ResConvBlock(256, 512, 128, 3, ResBlockB),
+            ResConvBlock(512, 1024, 256, 3, ResBlockB),
+            ResConvBlock(1024, 2048, 512, 3, ResBlockB),
+            GlobalAvgPool2D(),
+            Dense(2048, num_cls, 'softmax')])
+        self.addLayers(self.net)
+
+    def forward(self, x):
+        for block in self.net:
+            x = block(x)
+        return x

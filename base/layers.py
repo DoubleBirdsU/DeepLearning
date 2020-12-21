@@ -55,14 +55,18 @@ def Activation(activation='relu', **kwargs):
         dim = kwargs['dim'] if 'dim' in kwargs else -1
         act = nn.Softmax(dim)
     else:
-        inplace = False if 'inplace' not in kwargs else kwargs['inplace']
-        act = nn.ReLU(inplace)
+        act = Equ()
     return act
 
 
 class Layer(Module):
     def __init__(self):
         super(Layer, self).__init__()
+
+
+class Equ(Layer):
+    def forward(self, x):
+        return x
 
 
 class Flatten(Layer):
@@ -195,7 +199,8 @@ class FeatureExtractor(Layer):
             auto_padding(kernel_size, padding), groups=groups, bias=not bn and bias))
         if bn:  # BatchNormal
             self.add_module('bn', nn.BatchNorm2d(out_channels))
-        self.add_module('act', Activation(activation, **kwargs))  # Activation
+        if 'valid' != activation:
+            self.add_module('act', Activation(activation, **kwargs))  # Activation
         if pool:  # Pooling
             self.add_module('MaxPool2D', MaxPool2D(pool_size, pool_stride, padding))
         pass
@@ -206,6 +211,15 @@ class Dense(Layer):
         super(Dense, self).__init__()
         self.add_module('linear', nn.Linear(in_channels, out_channels, bias))
         self.add_module('act', Activation(activation, **kwargs))
+
+
+class GlobalAvgPool2D(Layer):
+    def forward(self, x):
+        """
+        Args:
+            x (torch.Tensor):
+        """
+        return torch.mean(torch.mean(x, dim=-1), dim=-1)
 
 
 # Activation functions below -------------------------------------------------------------------------------------------

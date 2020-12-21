@@ -3,22 +3,43 @@ import torch.nn as nn
 import numpy as np
 
 from base.base_model import Module
-from base.layers import FeatureExtractor, MaxPool2D
+from base.layers import FeatureExtractor, MaxPool2D, Equ
 
 
-def trans_tuple(in_, shape=(1, 2)):
-    if isinstance(in_, int) or len(tuple(in_)) == 1:
-        in_ = np.ones(*shape) * in_
-    return in_
+def trans_tuple(parm, shape=(1, 2)):
+    if isinstance(parm, int) or len(tuple(parm)) == 1:
+        parm = np.ones(*shape) * parm
+    return parm
+
+
+class ConvSameBnRelu(FeatureExtractor):
+    """ConvPBA
+        padding='same'
+        activation='relu'
+    """
+    def __init__(self, in_ch, out_ch, kernel_size=1, stride=1):
+        super(ConvSameBnRelu, self).__init__(in_ch, out_ch, kernel_size, stride, 'same', bn=True, activation='relu')
+
+
+class ModuleBlock(Module):
+    def __init__(self):
+        super(ModuleBlock, self).__init__()
+        self.blocks = list()
+
+    def forward(self, x):
+        for block in self.blocks:
+            x = block(x)
+        return x
 
 
 class AlexBlock(Module):
-    def __init__(self, in_channels, out_channels, kernel_channels=3, strides=3, padding='valid', pool=False):
+    def __init__(self, in_ch, out_ch, kernel_channels=3,
+                 strides=3, padding='valid', pool=False):
         """AlexBlock
 
         Args:
-            in_channels (Any):
-            out_channels (Any):
+            in_ch (Any):
+            out_ch (Any):
             kernel_channels (Any):
             strides (Any):
             padding:
@@ -28,16 +49,17 @@ class AlexBlock(Module):
             None
         """
         super(AlexBlock, self).__init__()
-        in_channels = trans_tuple(in_channels)
-        out_channels = trans_tuple(out_channels)
+        in_ch = trans_tuple(in_ch)
+        out_ch = trans_tuple(out_ch)
         kernel_channels = trans_tuple(kernel_channels)
         strides = trans_tuple(strides)
         self._layers = list([[], []])
 
-        for in_ch, out_ch, kernel_size, stride in zip(in_channels, out_channels, kernel_channels, strides):
+        for in_ch, out_ch, kernel_size, stride in zip(in_ch, out_ch, kernel_channels, strides):
             layer_list = list()
             for i in range(2):
-                layer_list.append(FeatureExtractor(in_ch, out_ch, kernel_size, stride, padding, activation='relu'))
+                layer_list.append(FeatureExtractor(in_ch, out_ch, kernel_size, stride,
+                                                   padding=padding, bn=True, activation='relu'))
                 if pool:
                     layer_list.append(MaxPool2D(3, 1, 'same'))
                 self.addLayers(layer_list)
@@ -50,60 +72,51 @@ class AlexBlock(Module):
         return torch.cat((x_l, x_r), dim=-1)
 
 
-class VGGBlock(Module):
-    def __init__(self, in_channels, out_channels, num_layer=2, out_kernel_size=3,
-                 pool=False, kernel_size=1, stride=1):
-        """VGGBlock
+class VGGPoolBlock(Module):
+    def __init__(self, in_ch, out_ch, kernel_size=3, num_layer=2, pool_size=1, pool_stride=1):
+        """VGGPoolBlock
 
         Args:
-            in_channels:
-            out_channels:
+            in_ch:
+            out_ch:
             num_layer:
-            out_kernel_size:
+            kernel_size:
 
         Returns:
             None
         """
-        super(VGGBlock, self).__init__()
-        self.add_module('fe1',
-                        FeatureExtractor(in_channels, out_channels, kernel_size=3, padding='same', bn=True,
-                                         activation='relu'))
-        if 3 == num_layer:
-            self.add_module('fe2', FeatureExtractor(out_channels, out_channels, kernel_size=3, padding='same', bn=True,
-                                                    activation='relu'))
-        self.add_module(f'fe{num_layer}',
-                        FeatureExtractor(out_channels, out_channels, kernel_size=out_kernel_size, padding='same',
-                                         bn=True, activation='relu', pool=pool, pool_size=kernel_size,
-                                         pool_stride=stride))
+        super(VGGPoolBlock, self).__init__()
+        self.add_module('fe1', ConvSameBnRelu(in_ch, out_ch, 3))
+        if 3 >= num_layer:
+            self.add_module('fe2', ConvSameBnRelu(out_ch, out_ch, 3))
+        self.add_module(f'fe{num_layer}', ConvSameBnRelu(out_ch, out_ch, kernel_size))
+        self.add_module('max_pool', MaxPool2D(pool_size, pool_stride))
 
 
-class InceptionBlock(Module):
-    def __init__(self, out_channels=0):
-        super(InceptionBlock, self).__init__()
+class ConcatBlock(Module):
+    def __init__(self, out_ch=0):
+        super(ConcatBlock, self).__init__()
         self.inc_list = None
-        self.out_ch = out_channels // 4
+        self.out_ch = out_ch // 4
 
     def forward(self, x):
         return torch.cat([module(x) for module in self.inc_list], dim=-3)
 
 
-class InceptionBlock_v1A(InceptionBlock):
-    def __init__(self, in_channels, out_channels):
-        super(InceptionBlock_v1A, self).__init__(out_channels)
+class InceptionBlock_v1A(ConcatBlock):
+    def __init__(self, in_ch, out_ch):
+        super(InceptionBlock_v1A, self).__init__(out_ch)
         self.inc_list = [
-            FeatureExtractor(in_channels, self.out_ch, kernel_size=1, stride=2, padding='same', bn=True,
-                             activation='relu'),
-            FeatureExtractor(in_channels, self.out_ch, kernel_size=3, stride=2, padding='same', bn=True,
-                             activation='relu'),
-            FeatureExtractor(in_channels, self.out_ch, kernel_size=5, stride=2, padding='same', bn=True,
-                             activation='relu'),
+            ConvSameBnRelu(in_ch, self.out_ch, 1, stride=2),
+            ConvSameBnRelu(in_ch, self.out_ch, 3, stride=2),
+            ConvSameBnRelu(in_ch, self.out_ch, 5, stride=2),
             MaxPool2D(3, stride=2, padding='same')
         ]
         self.addLayers(self.inc_list)
 
 
-class InceptionBlock_v1B(InceptionBlock):
-    def __init__(self, in_channels, out_channels):
+class InceptionBlock_v1B(ConcatBlock):
+    def __init__(self, in_ch, out_ch):
         """InceptionBlock_v1B
             c1-s2, c3-s2, c5-s2, pool-s2
 
@@ -118,33 +131,31 @@ class InceptionBlock_v1B(InceptionBlock):
             call: concat([c1-s2(x), c3-s2(x), c5-s2(x), p-s2(x)], -3)
 
         Args:
-            in_channels:
-            out_channels:
+            in_ch:
+            out_ch:
 
         Returns:
             None
         """
-        super(InceptionBlock_v1B, self).__init__(out_channels)
+        super(InceptionBlock_v1B, self).__init__(out_ch)
         self.inc_list = [
             nn.Sequential(
-                FeatureExtractor(in_channels, self.out_ch, kernel_size=1, stride=2, padding='same', bn=True,
-                                 activation='relu')),
+                ConvSameBnRelu(in_ch, self.out_ch, 1, stride=2)),
             nn.Sequential(
-                FeatureExtractor(in_channels, self.out_ch, padding='same', bn=True, activation='relu'),
-                FeatureExtractor(self.out_ch, self.out_ch, kernel_size=3, stride=2, padding='same', bn=True,
-                                 activation='relu')),
+                ConvSameBnRelu(in_ch, self.out_ch, 1),
+                ConvSameBnRelu(self.out_ch, self.out_ch, 3, stride=2)),
             nn.Sequential(
-                FeatureExtractor(in_channels, self.out_ch, padding='same', bn=True, activation='relu'),
-                FeatureExtractor(self.out_ch, self.out_ch, kernel_size=5, stride=2, padding='same', bn=True,
-                                 activation='relu')),
+                ConvSameBnRelu(in_ch, self.out_ch, 1),
+                ConvSameBnRelu(self.out_ch, self.out_ch, 5, stride=2)),
             nn.Sequential(
                 MaxPool2D(3, stride=2, padding='same'),
-                FeatureExtractor(in_channels, self.out_ch, padding='same', bn=True, activation='relu'))]
+                ConvSameBnRelu(in_ch, self.out_ch, 1))
+        ]
         self.addLayers(self.inc_list)
 
 
-class InceptionBlock_v3A(InceptionBlock):
-    def __init__(self, in_channels, out_channels):
+class InceptionBlock_v3A(ConcatBlock):
+    def __init__(self, in_ch, out_ch):
         """InceptionBlock_v1B
             c1-s2, c3-s2, c5-s2, pool-s2
 
@@ -159,34 +170,32 @@ class InceptionBlock_v3A(InceptionBlock):
             call: concat([c1-s2(x), c3-s2(x), c5-s2(x), p-s2(x)], -3)
 
         Args:
-            in_channels:
-            out_channels:
+            in_ch:
+            out_ch:
 
         Returns:
             None
         """
-        super(InceptionBlock_v3A, self).__init__(out_channels)
+        super(InceptionBlock_v3A, self).__init__(out_ch)
         self.inc_list = [
             nn.Sequential(
-                FeatureExtractor(in_channels, self.out_ch, kernel_size=1, stride=2, padding='same', bn=True,
-                                 activation='relu')),
+                ConvSameBnRelu(in_ch, self.out_ch, 1, stride=2)),
             nn.Sequential(
-                FeatureExtractor(in_channels, self.out_ch, padding='same', bn=True, activation='relu'),
-                FeatureExtractor(self.out_ch, self.out_ch, kernel_size=3, stride=2, padding='same', bn=True,
-                                 activation='relu')),
+                ConvSameBnRelu(in_ch, self.out_ch, 1),
+                ConvSameBnRelu(self.out_ch, self.out_ch, 3, stride=2)),
             nn.Sequential(
-                FeatureExtractor(in_channels, self.out_ch, padding='same', bn=True, activation='relu'),
-                FeatureExtractor(self.out_ch, self.out_ch, kernel_size=3, padding='same', bn=True, activation='relu'),
-                FeatureExtractor(self.out_ch, self.out_ch, kernel_size=3, stride=2, padding='same', bn=True,
-                                 activation='relu')),
+                ConvSameBnRelu(in_ch, self.out_ch, 1),
+                ConvSameBnRelu(self.out_ch, self.out_ch, 3),
+                ConvSameBnRelu(self.out_ch, self.out_ch, 3, stride=2)),
             nn.Sequential(
                 MaxPool2D(3, stride=2, padding='same'),
-                FeatureExtractor(in_channels, self.out_ch, padding='same', bn=True, activation='relu'))]
+                ConvSameBnRelu(in_ch, self.out_ch, 1))
+        ]
         self.addLayers(self.inc_list)
 
 
-class InceptionBlock_v3B(InceptionBlock):
-    def __init__(self, in_channels, out_channels, kernel_n=3):
+class InceptionBlock_v3B(ConcatBlock):
+    def __init__(self, in_ch, out_ch, kernel_n=3):
         """InceptionBlock_v1B
             c1-s2, c3-s2, c5-s2, pool-s2
 
@@ -201,35 +210,235 @@ class InceptionBlock_v3B(InceptionBlock):
             call: concat([c1-s2(x), c3-s2(x), c5-s2(x), p-s2(x)], -3)
 
         Args:
-            in_channels:
-            out_channels:
+            in_ch:
+            out_ch:
             kernel_n:
 
         Returns:
             None
         """
-        super(InceptionBlock_v3B, self).__init__(out_channels)
+        super(InceptionBlock_v3B, self).__init__(out_ch)
         self.inc_list = [
             nn.Sequential(
-                FeatureExtractor(in_channels, self.out_ch, kernel_size=1, stride=2, padding='same', bn=True,
-                                 activation='relu')),
+                ConvSameBnRelu(in_ch, self.out_ch, kernel_size=1, stride=2)),
             nn.Sequential(
-                FeatureExtractor(in_channels, self.out_ch, padding='same', bn=True, activation='relu'),
-                FeatureExtractor(self.out_ch, self.out_ch, kernel_size=(1, kernel_n), stride=(2, 1), padding='same',
-                                 bn=True, activation='relu'),
-                FeatureExtractor(self.out_ch, self.out_ch, kernel_size=(kernel_n, 1), stride=(1, 2), padding='same',
-                                 bn=True, activation='relu')),
+                ConvSameBnRelu(in_ch, self.out_ch, 1),
+                ConvSameBnRelu(self.out_ch, self.out_ch, kernel_size=(1, kernel_n), stride=(2, 1)),
+                ConvSameBnRelu(self.out_ch, self.out_ch, kernel_size=(kernel_n, 1), stride=(1, 2))),
             nn.Sequential(
-                FeatureExtractor(in_channels, self.out_ch, padding='same', bn=True, activation='relu'),
-                FeatureExtractor(self.out_ch, self.out_ch, kernel_size=(1, kernel_n), padding='same', bn=True,
-                                 activation='relu'),
-                FeatureExtractor(self.out_ch, self.out_ch, kernel_size=(kernel_n, 1), padding='same', bn=True,
-                                 activation='relu'),
-                FeatureExtractor(self.out_ch, self.out_ch, kernel_size=(1, kernel_n), stride=(2, 1), padding='same',
-                                 bn=True, activation='relu'),
-                FeatureExtractor(self.out_ch, self.out_ch, kernel_size=(kernel_n, 1), stride=(1, 2), padding='same',
-                                 bn=True, activation='relu')),
+                ConvSameBnRelu(in_ch, self.out_ch, 1),
+                ConvSameBnRelu(self.out_ch, self.out_ch, kernel_size=(1, kernel_n)),
+                ConvSameBnRelu(self.out_ch, self.out_ch, kernel_size=(kernel_n, 1)),
+                ConvSameBnRelu(self.out_ch, self.out_ch, kernel_size=(1, kernel_n), stride=(2, 1)),
+                ConvSameBnRelu(self.out_ch, self.out_ch, kernel_size=(kernel_n, 1), stride=(1, 2))),
             nn.Sequential(
                 MaxPool2D(3, stride=2, padding='same'),
-                FeatureExtractor(in_channels, self.out_ch, padding='same', bn=True, activation='relu'))]
+                ConvSameBnRelu(in_ch, self.out_ch, 1))
+        ]
         self.addLayers(self.inc_list)
+
+
+class ReductionBlock_v4B(ConcatBlock):
+    def __init__(self, in_ch, out_ch):
+        """ReductionBlock_v4B
+            c1-s2, c3-s2, c5-s2, pool-s2
+
+            c1-s2: Conv1-s2
+
+            c3-s2: Conv1 -> Conv3-s2
+
+            c5-s2: Conv1 -> Conv5-s2
+
+            pool-s2: MaxPooling-s2 -> Conv1
+
+            call: concat([c1-s2(x), c3-s2(x), c5-s2(x), p-s2(x)], -3)
+
+        Args:
+            in_ch:
+            out_ch:
+
+        Returns:
+            None
+        """
+        super(ReductionBlock_v4B, self).__init__(out_ch)
+        self.inc_list = [
+            nn.Sequential(
+                ConvSameBnRelu(in_ch, 256, 1),
+                ConvSameBnRelu(256, 384, 3, stride=2)),
+            nn.Sequential(
+                ConvSameBnRelu(in_ch, 256, 1),
+                ConvSameBnRelu(256, 288, 3, stride=2)),
+            nn.Sequential(
+                ConvSameBnRelu(in_ch, 256, 1),
+                ConvSameBnRelu(256, 288, 3),
+                FeatureExtractor(288, 320, 3, stride=2)),
+            nn.Sequential(MaxPool2D(3, stride=2, padding='same')),
+        ]
+        self.addLayers(self.inc_list)
+
+
+class IncResBlock_v4A(ConcatBlock):
+    def __init__(self, in_ch, out_ch):
+        """IncResBlock_v4A
+            c1-s2, c3-s2, c5-s2, pool-s2
+
+            c1-s2: Conv1-s2
+
+            c3-s2: Conv1 -> Conv3-s2
+
+            c5-s2: Conv1 -> Conv5-s2
+
+            pool-s2: MaxPooling-s2 -> Conv1
+
+            call: concat([c1-s2(x), c3-s2(x), c5-s2(x), p-s2(x)], -3)
+
+        Args:
+            in_ch:
+            out_ch:
+
+        Returns:
+            None
+        """
+        super(IncResBlock_v4A, self).__init__(out_ch)
+        self.inc_list = [
+            nn.Sequential(
+                ConvSameBnRelu(in_ch, self.out_ch, stride=2)),
+            nn.Sequential(
+                ConvSameBnRelu(in_ch, self.out_ch, 1),
+                ConvSameBnRelu(self.out_ch, self.out_ch, 3, stride=2)),
+            nn.Sequential(
+                ConvSameBnRelu(in_ch, self.out_ch, 1),
+                ConvSameBnRelu(self.out_ch, self.out_ch, 3),
+                ConvSameBnRelu(self.out_ch, self.out_ch, 3, stride=2)),
+            nn.Sequential(
+                MaxPool2D(3, stride=2, padding='same'),
+                ConvSameBnRelu(in_ch, self.out_ch, 1)),
+        ]
+        self.addLayers(self.inc_list)
+
+
+class IncResBlock_v4B(ConcatBlock):
+    def __init__(self, in_ch, out_ch, kernel_n=3):
+        """IncResBlock_v4B
+            c1-s2, c3-s2, c5-s2, pool-s2
+
+            c1-s2: Conv1-s2
+
+            c3-s2: Conv1 -> Conv3-s2
+
+            c5-s2: Conv1 -> Conv5-s2
+
+            pool-s2: MaxPooling-s2 -> Conv1
+
+            call: concat([c1-s2(x), c3-s2(x), c5-s2(x), p-s2(x)], -3)
+
+        Args:
+            in_ch:
+            out_ch:
+            kernel_n:
+
+        Returns:
+            None
+        """
+        super(IncResBlock_v4B, self).__init__(out_ch)
+        self.inc_list = [
+            nn.Sequential(
+                ConvSameBnRelu(in_ch, self.out_ch, kernel_size=1, stride=2)),
+            nn.Sequential(
+                ConvSameBnRelu(in_ch, self.out_ch, 1),
+                ConvSameBnRelu(self.out_ch, self.out_ch, kernel_size=(1, kernel_n), stride=(2, 1)),
+                ConvSameBnRelu(self.out_ch, self.out_ch, kernel_size=(kernel_n, 1), stride=(1, 2)),),
+            nn.Sequential(
+                ConvSameBnRelu(in_ch, self.out_ch, 1),
+                ConvSameBnRelu(self.out_ch, self.out_ch, kernel_size=(1, kernel_n)),
+                ConvSameBnRelu(self.out_ch, self.out_ch, kernel_size=(kernel_n, 1)),
+                ConvSameBnRelu(self.out_ch, self.out_ch, kernel_size=(1, kernel_n), stride=(2, 1)),
+                ConvSameBnRelu(self.out_ch, self.out_ch, kernel_size=(kernel_n, 1), stride=(1, 2)),),
+            nn.Sequential(
+                MaxPool2D(3, stride=2, padding='same'),
+                ConvSameBnRelu(in_ch, self.out_ch, 1))
+        ]
+        self.addLayers(self.inc_list)
+
+
+class ResConvBlock(ModuleBlock):
+    def __init__(self, in_ch, out_ch, mid_ch, num_layer, res_block, residual_path_first='conv'):
+        """ResConvBlock
+            residual_path
+
+        Args:
+            in_ch:
+            out_ch:
+            mid_ch:
+            num_layer:
+            res_block:
+            residual_path_first:
+
+        Returns:
+            None
+        """
+        super(ResConvBlock, self).__init__()
+        self.blocks.append(res_block(in_ch, out_ch, mid_ch=mid_ch, residual_path=residual_path_first))
+        for i in range(1, num_layer - 1):
+            self.blocks.append(res_block(out_ch, out_ch, mid_ch=mid_ch, residual_path='equal'))
+        self.blocks.append(res_block(out_ch, out_ch, stride=2, mid_ch=mid_ch, residual_path='pool'))
+        self.addLayers(self.blocks)
+
+    @staticmethod
+    def double_channels(in_ch, out_ch, mid_ch):
+        return in_ch * 2, out_ch * 2, mid_ch * 2
+
+
+class ResBlock(Module):
+    @staticmethod
+    def make_shortcut(in_ch, out_ch, pool_size, residual_path='equal'):
+        """make_shortcut
+            Conv, MaxPool2D, Equ
+
+        Args:
+            in_ch:
+            out_ch:
+            pool_size:
+            residual_path: 'conv', 'pool', 'equal', Default 'equal'
+
+        Returns:
+            None
+        """
+        if residual_path == 'conv':
+            shortcut = FeatureExtractor(in_ch, out_ch, 1, strides=1, padding='same')
+        elif residual_path == 'pool':
+            shortcut = MaxPool2D(pool_size, stride=2, padding='same')
+        else:
+            shortcut = Equ()
+        return shortcut
+
+
+class ResBlockA(ResBlock):
+    def __init__(self, in_ch, out_ch, stride=1, mid_ch=None, pool_size=1, residual_path='equal'):
+        super(ResBlockA, self).__init__()
+        self.res_fun = nn.Sequential(
+            ConvSameBnRelu(in_ch, mid_ch, 3),
+            FeatureExtractor(mid_ch, out_ch, 3, stride=stride, padding='same', bn=True),
+        )
+        self.shortcut = self.make_shortcut(in_ch, out_ch, pool_size, residual_path)
+        self.act = nn.ReLU(inplace=True)
+        self.addLayers([self.res_fun, self.shortcut, self.act])
+
+    def forward(self, x):
+        return self.act(self.res_fun(x) + self.shortcut(x))
+
+
+class ResBlockB(ResBlock):
+    def __init__(self, in_ch, out_ch, stride=1, mid_ch=None, pool_size=1, residual_path='equal'):
+        super(ResBlockB, self).__init__()
+        self.res_fun = nn.Sequential(
+            ConvSameBnRelu(in_ch, mid_ch, 1),
+            ConvSameBnRelu(mid_ch, mid_ch, 3, stride=stride),
+            FeatureExtractor(mid_ch, out_ch, 1, padding='same', bn=True),
+        )
+        self.shortcut = self.make_shortcut(in_ch, out_ch, pool_size, residual_path)
+        self.act = nn.ReLU(inplace=True)
+        self.addLayers([self.res_fun, self.shortcut, self.act])
+
+    def forward(self, x):
+        return self.act(self.res_fun(x) + self.shortcut(x))

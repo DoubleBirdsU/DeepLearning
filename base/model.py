@@ -9,7 +9,7 @@ import torch.optim as optim
 from torch import nn
 from base.base_model import base_model, Module
 from base.blocks import AlexBlock, VGGPoolBlock, InceptionBlock_v1B, InceptionBlock_v3B, ResConvBlock, ResBlockB
-from base.layers import MaxPool2D, Dense, FeatureExtractor, GlobalAvgPool2D
+from base.layers import MaxPool2D, Dense, FeatureExtractor, GlobalAvgPool2D, RoIDense
 from base.utils import print_cover
 
 ONNX_EXPORT = False
@@ -364,6 +364,14 @@ class NNet(Module):
         return channels * ((torch.Tensor(in_shape).int() + down_size - 1 - shape_bias) //
                            down_size - channels_bias).prod()
 
+    @staticmethod
+    def get_roi_size(roi_size, in_shape, down_size=32, channels_bias=0, shape_bias=0):
+        output_size: torch.Tensor = (torch.Tensor(in_shape).int() + down_size - 1 - shape_bias) //\
+                                    down_size - channels_bias
+        if roi_size is None:
+            roi_size = output_size
+        return output_size.minimum(roi_size)
+
     def _make_callbacks(self, callbacks):
         if callbacks is None:
             return
@@ -396,7 +404,7 @@ class NNet(Module):
 
 
 class LeNet(NNet):
-    def __init__(self, num_cls=10, img_size=(1, 28, 28)):
+    def __init__(self, num_cls=10, img_size=(1, 28, 28), roi_size=None):
         """LeNet
 
         Input:
@@ -409,51 +417,52 @@ class LeNet(NNet):
             None
         """
         super(LeNet, self).__init__()
+        roi_size = self.get_roi_size(roi_size, img_size[1:], 4, 5)
         self.addLayers([
             FeatureExtractor(img_size[0], 6, 5),  # 1x28x28 -> 6x24x24
             FeatureExtractor(6, 6, 5),  # 6x24x24 -> 6x20x20
             FeatureExtractor(6, 16, 5, stride=2),  # 6x20x20 -> 16x8x8 (n + 1) // 2 - 6
             FeatureExtractor(16, 16, 5, stride=2),  # 16x8x8 -> 16x2x2 (n + 3) // 4 - 5
-            nn.Flatten(),  # 16x2x2 -> 64
-            Dense(self.get_channels(16, img_size[1:], 4, 5), 120, 'sigmoid'),
+            RoIDense(16, 120, roi_size, activation='sigmoid'),
             Dense(120, 84, 'sigmoid'),
             Dense(84, num_cls, activation='softmax'),
         ])
 
 
 class AlexNet(NNet):
-    def __init__(self, num_cls=1000, img_size=(3, 224, 224)):
+    def __init__(self, num_cls=1000, img_size=(3, 224, 224), roi_size=None):
         super(AlexNet, self).__init__()
+        roi_size = self.get_roi_size(roi_size, img_size[1:], down_size=16, channels_bias=-1)
         self.addLayers([
             AlexBlock((img_size[0], 48), (48, 128), (11, 5), (4, 1), pool=True),
             AlexBlock((256, 192, 192), (192, 192, 128), 3, 1),
             MaxPool2D(3, 1, 'same'),
-            nn.Flatten(),
-            Dense(256 * 13 * 13, 4096, 'relu'),
+            RoIDense(256, 4096, roi_size, 'relu'),
             Dense(4096, 4096, 'relu'),
             Dense(4096, num_cls, activation='softmax'),
         ])
 
 
 class VGG16(NNet):
-    def __init__(self, num_cls=1000, img_size=(3, 224, 224)):
+    def __init__(self, num_cls=1000, img_size=(3, 224, 224), roi_size=None):
         super(VGG16, self).__init__()
+        roi_size = self.get_roi_size(roi_size, img_size[1:])
         self.addLayers([
             VGGPoolBlock(img_size[0], 64, num_layer=2, pool_size=3, pool_stride=2),
             VGGPoolBlock(64, 128, num_layer=2, pool_size=3, pool_stride=2),
             VGGPoolBlock(128, 256, num_layer=3, pool_size=3, pool_stride=2),
             VGGPoolBlock(256, 512, num_layer=3, pool_size=3, pool_stride=2),
             VGGPoolBlock(512, 512, num_layer=3, pool_size=3, pool_stride=2),
-            nn.Flatten(),
-            Dense(512 * ((torch.Tensor(img_size[1:]).int() + 31) // 32).prod(), 512, 'relu'),
+            RoIDense(512, 512, roi_size, 'relu'),
             Dense(512, 512, 'relu'),
             Dense(512, num_cls, activation='softmax'),
         ])
 
 
 class InceptionNet_v1B(NNet):
-    def __init__(self, num_cls=1000, img_size=(3, 224, 224)):
+    def __init__(self, num_cls=1000, img_size=(3, 224, 224), roi_size=None):
         super(InceptionNet_v1B, self).__init__()
+        roi_size = self.get_roi_size(roi_size, img_size[1:], 16)
         self.net = nn.Sequential(
             FeatureExtractor(img_size[0], 64, 3, padding='same', bn=True, activation='relu'),
             InceptionBlock_v1B(64, 64),
@@ -465,8 +474,7 @@ class InceptionNet_v1B(NNet):
             FeatureExtractor(256, 512, 3, padding='same', bn=True, activation='relu'),
             FeatureExtractor(512, 512, 3, padding='same', bn=True, activation='relu'),
             InceptionBlock_v1B(512, 512),
-            nn.Flatten(),
-            Dense(self.get_channels(512, img_size[1:], 16), 512, 'relu'),
+            RoIDense(512, 512, roi_size, 'relu'),
             Dense(512, 512, 'relu'),
             Dense(512, num_cls, activation='softmax'),
         )
@@ -477,8 +485,9 @@ class InceptionNet_v1B(NNet):
 
 
 class InceptionNet_v3B(NNet):
-    def __init__(self, num_cls=1000, img_size=(3, 224, 224)):
+    def __init__(self, num_cls=1000, img_size=(3, 224, 224), roi_size=None):
         super(InceptionNet_v3B, self).__init__()
+        roi_size = self.get_roi_size(roi_size, img_size[1:], 16)
         self.net = nn.Sequential(
             FeatureExtractor(img_size[0], 64, 3, padding='same', bn=True, activation='relu'),
             InceptionBlock_v3B(64, 64),
@@ -490,8 +499,7 @@ class InceptionNet_v3B(NNet):
             FeatureExtractor(256, 512, 3, padding='same', bn=True, activation='relu'),
             FeatureExtractor(512, 512, 3, padding='same', bn=True, activation='relu'),
             InceptionBlock_v3B(512, 512),
-            nn.Flatten(),
-            Dense(self.get_channels(512, img_size[1:], 16), 512, activation='relu'),
+            RoIDense(512, 512, roi_size, 'relu'),
             Dense(512, num_cls, activation='softmax'),
         )
         self.addLayers(self.net)
@@ -501,7 +509,7 @@ class InceptionNet_v3B(NNet):
 
 
 class ResNet(NNet):
-    def __init__(self, num_cls=1000, img_size=(3, 512, 512)):
+    def __init__(self, num_cls=1000, img_size=(3, 512, 512), roi_size=1):
         """ResNet
             ResNet18: [2, 2, 2, 2] ResBlockA
 
@@ -529,7 +537,8 @@ class ResNet(NNet):
             ResConvBlock(512, 1024, 256, 3, ResBlockB),
             ResConvBlock(1024, 2048, 512, 3, ResBlockB),
             GlobalAvgPool2D(),
-            Dense(2048, num_cls, 'softmax')])
+            Dense(2048, num_cls, 'softmax'),
+        ])
         self.addLayers(self.net)
 
     def forward(self, x):

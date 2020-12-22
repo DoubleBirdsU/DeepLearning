@@ -99,6 +99,7 @@ class FeatureConcat(Layer):
 class WeightedFeatureFusion(Layer):  # weighted sum of 2 or more layers https://arxiv.org/abs/1911.09070
     """将多个特征矩阵的值进行融合
     """
+
     def __init__(self, layers, weight=False):
         super(WeightedFeatureFusion, self).__init__()
         self.layers = layers  # layer indices
@@ -220,6 +221,16 @@ class GlobalAvgPool2D(Layer):
             x (torch.Tensor):
         """
         return torch.mean(torch.mean(x, dim=-1), dim=-1)
+
+
+class RoIDense(Layer):
+    def __init__(self, in_ch, out_ch, roi_size, activation=None, bias=True, **kwargs):
+        super(RoIDense, self).__init__()
+        self.addLayers([
+            nn.AdaptiveMaxPool2d(roi_size),
+            nn.Flatten(),
+            Dense(in_ch * roi_size.prod(), out_ch, activation, bias, **kwargs),
+        ])
 
 
 # Activation functions below -------------------------------------------------------------------------------------------

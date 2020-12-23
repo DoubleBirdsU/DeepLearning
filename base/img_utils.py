@@ -10,15 +10,17 @@ def letterbox(img: np.ndarray,
               scale_up=True):
     """
     将图片缩放调整到指定大小
-    :param img: 输入的图像numpy格式
-    :param new_shape: 输入网络的shape
-    :param color: padding用什么颜色填充
-    :param auto:
-    :param scale_fill: 简单粗暴缩放到指定大小
-    :param scale_up:  只缩小，不放大
-    :return:
-    """
+    Args:
+        img: 输入的图像numpy格式
+        new_shape: 输入网络的shape
+        color: padding用什么颜色填充
+        auto:
+        scale_fill: 简单粗暴缩放到指定大小
+        scale_up:  只缩小，不放大
 
+    Returns:
+        None
+    """
     shape = img.shape[:2]  # [h, w]
     if isinstance(new_shape, int):
         new_shape = (new_shape, new_shape)
@@ -51,11 +53,3 @@ def letterbox(img: np.ndarray,
 
     img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
     return img, ratio, (dw, dh)
-
-
-
-
-
-
-
-

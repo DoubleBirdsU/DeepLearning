@@ -9,7 +9,7 @@ import torch.optim as optim
 from torch import nn
 from base.base_model import base_model, Module
 from base.blocks import AlexBlock, VGGPoolBlock, InceptionBlock_v1B, InceptionBlock_v3B, ResConvBlock, ResBlockB
-from base.layers import MaxPool2D, Dense, FeatureExtractor, GlobalAvgPool2D, RoIDense
+from base.layers import MaxPool2D, Dense, FeatureExtractor, RoIDense
 from base.utils import print_cover
 
 ONNX_EXPORT = False
@@ -509,7 +509,11 @@ class InceptionNet_v3B(NNet):
 
 
 class ResNet(NNet):
-    def __init__(self, num_cls=1000, img_size=(3, 512, 512), roi_size=1):
+    in_chs = [64, 256, 512, 1024]
+    out_chs = [256, 512, 1024, 2048]
+    mid_chs = [64, 128, 256, 512]
+
+    def __init__(self, num_cls=1000, img_size=(3, 512, 512), num_res_block=5, include_top=True, roi_size=None):
         """ResNet
             ResNet18: [2, 2, 2, 2] ResBlockA
 
@@ -532,13 +536,16 @@ class ResNet(NNet):
         self.net = list([
             FeatureExtractor(img_size[0], 64, 7, stride=2, padding='same', bn=True, activation='relu'),
             MaxPool2D(3, stride=2, padding='same'),
-            ResConvBlock(64, 256, 64, 3, ResBlockB),
-            ResConvBlock(256, 512, 128, 3, ResBlockB),
-            ResConvBlock(512, 1024, 256, 3, ResBlockB),
-            ResConvBlock(1024, 2048, 512, 3, ResBlockB),
-            GlobalAvgPool2D(),
-            Dense(2048, num_cls, 'softmax'),
         ])
+
+        num = num_res_block - 1
+        for in_ch, out_ch, mid_ch in zip(self.in_chs[:num], self.out_chs[:num], self.mid_chs[:num]):
+            self.net.append(ResConvBlock(in_ch, out_ch, mid_ch, 3, ResBlockB))
+
+        self.out_ch_last = self.out_chs[num - 2] << (num - 2)
+        if include_top:
+            roi_size = self.get_roi_size(roi_size, img_size[1:], 2 >> num)
+            self.net.append(RoIDense(2028, num_cls, roi_size, 'softmax'))
         self.addLayers(self.net)
 
     def forward(self, x):

@@ -3,9 +3,7 @@ import math
 import os
 import random
 import shutil
-import time
 from pathlib import Path
-from threading import Thread
 
 import cv2
 import numpy as np
@@ -14,11 +12,10 @@ from PIL import Image, ExifTags
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from utils.utils import xyxy2xywh, xywh2xyxy
+from base.utils import xywh2ltrb, ltrb2xywh
 
 help_url = 'https://github.com/ultralytics/yolov3/wiki/Train-Custom-Data'
 img_formats = ['.bmp', '.jpg', '.jpeg', '.png', '.tif', '.dng']
-
 
 # get orientation in exif tag
 # 找到图像exif信息中对应旋转信息的key值
@@ -35,25 +32,34 @@ def exif_size(img):
     :return: 原始图像的size
     """
     # Returns exif-corrected PIL size
-    s = img.size  # (width, height)
+    size = img.size  # (width, height)
     try:
         rotation = dict(img._getexif().items())[orientation]
         if rotation == 6:  # rotation 270  顺时针翻转90度
-            s = (s[1], s[0])
-        elif rotation == 8:  # ratation 90  逆时针翻转90度
-            s = (s[1], s[0])
+            size = (size[1], size[0])
+        elif rotation == 8:  # rotation 90  逆时针翻转90度
+            size = (size[1], size[0])
     except:
         # 如果图像的exif信息中没有旋转信息，则跳过
         pass
 
-    return s
+    return size
 
 
 class LoadImageAndLabels(Dataset):  # for training/testing
-    def __init__(self, path, img_size=416, batch_size=16, augment=False, hyp=None,
-                 rect=False, image_weights=False, cache_images=False,
-                 single_cls=False, pad=0.0, rank=-1):
-
+    def __init__(
+            self, path,
+            img_size=416,
+            batch_size=16,
+            augment=False,
+            hyp=None,
+            rect=False,
+            image_weights=False,
+            cache_images=False,
+            single_cls=False,
+            pad=0.0,
+            rank=-1
+    ):
         try:
             path = str(Path(path))
             parent = str(Path(path).parent) + os.sep
@@ -72,15 +78,15 @@ class LoadImageAndLabels(Dataset):  # for training/testing
         except:
             raise Exception("Error loading data from %s. See %s" % (path, help_url))
 
-        n = len(self.img_files)
-        assert n > 0, "No images found in %s. See %s" % (path, help_url)
+        num_files = len(self.img_files)
+        assert num_files > 0, "No images found in %s. See %s" % (path, help_url)
 
         # batch index
-        bi = np.floor(np.arange(n) / batch_size).astype(np.int)
-        nb = bi[-1] + 1  # number of batches
+        idx_batch = np.floor(np.arange(num_files) / batch_size).astype(np.int)
+        num_batch = idx_batch[-1] + 1  # number of batches
 
-        self.n = n  # number of images
-        self.batch = bi  # batch index of image
+        self.num_imgs = num_files  # number of images
+        self.batch = idx_batch  # batch index of image
         self.img_size = img_size
         self.augment = augment
         self.hyp = hyp
@@ -93,39 +99,39 @@ class LoadImageAndLabels(Dataset):  # for training/testing
                             for x in self.img_files]
 
         # Read image shapes (wh)
-        sp = path.replace(".txt", "") + ".shapes"  # shapefile path
+        shape_path = path.replace(".txt", "") + ".shapes"  # shapefile path
         try:
-            with open(sp, "r") as f:  # read existing shapefile
-                s = [x.split() for x in f.read().splitlines()]
+            with open(shape_path, "r") as f:  # read existing shapefile
+                shapes = [x.split() for x in f.read().splitlines()]
                 # 判断现有的shape文件中的行数(图像个数)是否与当前数据集中图像个数相等
                 # 如果不相等则认为是不同的数据集，故重新生成shape文件
-                assert len(s) == n, "shapefile out of aync"
+                assert len(shapes) == num_files, "shapefile out of async"
         except:
-            # tqdm库会显示处理的进度
-            s = [exif_size(Image.open(f)) for f in tqdm(self.img_files, desc="Reading image shapes")]
+            # tqdm 库会显示处理的进度
+            shapes = [exif_size(Image.open(f)) for f in tqdm(self.img_files, desc="Reading image shapes")]
             # 将所有图片的shape信息保存在.shape文件中
-            np.savetxt(sp, s, fmt="%g")  # overwrite existing (if any)
+            np.savetxt(shape_path, shapes, fmt="%g")  # overwrite existing (if any)
 
-        self.shapes = np.array(s, dtype=np.float64)
+        self.shapes = np.array(shapes, dtype=np.float64)
 
         # Rectangular Training https://github.com/ultralytics/yolov3/issues/232
         # 如果为ture，训练网络时，会使用类似原图像比例的矩形(让最长边为img_size)，而不是img_size x img_size
         if self.rect:
             # Sort by aspect ratio
-            s = self.shapes  # wh
-            ar = s[:, 1] / s[:, 0]  # aspect ratio
-            # argsort函数返回的是数组值从小到大的索引值
+            shapes = self.shapes  # wh
+            aspect_ratio = shapes[:, 1] / shapes[:, 0]  # aspect ratio
+            # argsort 函数返回的是数组值从小到大的索引值
             # 按照长宽比例进行排序
-            irect = ar.argsort()
-            self.img_files = [self.img_files[i] for i in irect]
-            self.label_files = [self.label_files[i] for i in irect]
-            self.shapes = s[irect]  # wh
-            ar = ar[irect]
+            idx_rect = aspect_ratio.argsort()
+            self.img_files = [self.img_files[i] for i in idx_rect]
+            self.label_files = [self.label_files[i] for i in idx_rect]
+            self.shapes = shapes[idx_rect]  # wh
+            aspect_ratio = aspect_ratio[idx_rect]
 
             # set training image shapes
-            shapes = [[1, 1]] * nb  # nb: number of batches
-            for i in range(nb):
-                ari = ar[bi == i]  # bi: batch index
+            shapes = [[1, 1]] * num_batch  # nb: number of batches
+            for i in range(num_batch):
+                ari = aspect_ratio[idx_batch == i]  # bi: batch index
                 mini, maxi = ari.min(), ari.max()
 
                 # 如果高/宽小于1(w > h)，将w设为img_size
@@ -138,11 +144,12 @@ class LoadImageAndLabels(Dataset):  # for training/testing
             self.batch_shapes = np.ceil(np.array(shapes) * img_size / 32. + pad).astype(np.int) * 32
 
         # cache labels
-        self.imgs = [None] * n
+        self.imgs = [None] * num_files
         # label: [class, x, y, w, h]
-        self.labels = [np.zeros((0, 5), dtype=np.float32)] * n
-        create_datasubset, extract_bounding_boxes, labels_loaded = False, False, False
-        nm, nf, ne, ns, nd = 0, 0, 0, 0, 0  # number mission, found, empty, datasunset, duplicate
+        self.labels = [np.zeros((0, 5), dtype=np.float32)] * num_files
+        create_data_subset, extract_bounding_boxes, labels_loaded = False, False, False
+        # number mission, found, empty, data sunset, duplicate
+        num_miss, num_found, num_empty, num_subset, num_duplicate = 0, 0, 0, 0, 0
         # 这里分别命名是为了防止出现rect为False/True时混用导致计算的mAP错误
         # 当rect为True时会对self.images和self.labels进行从新排序
         if rect is True:
@@ -150,13 +157,13 @@ class LoadImageAndLabels(Dataset):  # for training/testing
         else:
             np_labels_path = str(Path(self.label_files[0]).parent) + ".norect.npy"
         if os.path.isfile(np_labels_path):
-            s = np_labels_path  # print string
+            shapes = np_labels_path  # print string
             x = np.load(np_labels_path, allow_pickle=True)
-            if len(x) == n:
+            if len(x) == num_files:
                 self.labels = x
                 labels_loaded = True
         else:
-            s = path.replace("images", "labels")
+            shapes = path.replace("images", "labels")
 
         # 处理进度条只在第一个进程中显示
         if rank in [-1, 0]:
@@ -166,37 +173,37 @@ class LoadImageAndLabels(Dataset):  # for training/testing
 
         for i, file in enumerate(pbar):
             if labels_loaded is True:
-                l = self.labels[i]
+                label = self.labels[i]
             else:
                 try:
                     with open(file, "r") as f:
-                        l = np.array([x.split() for x in f.read().splitlines()], dtype=np.float32)
-                except:
-                    nm += 1  # file missing
+                        label = np.array([x.split() for x in f.read().splitlines()], dtype=np.float32)
+                except Exception as e:
+                    num_miss += 1  # file missing
                     continue
 
             # 如果标注信息不为空的话
-            if l.shape[0]:
-                assert l.shape[1] == 5, "> 5 label columns: %s" % file
-                assert (l >= 0).all(), "negative labels: %s" % file
-                assert (l[:, 1:] <= 1).all(), "non-normalized or out of bounds coordinate labels: %s" % file
+            if label.shape[0]:
+                assert label.shape[1] == 5, "> 5 label columns: %s" % file
+                assert (label >= 0).all(), "negative labels: %s" % file
+                assert (label[:, 1:] <= 1).all(), "non-normalized or out of bounds coordinate labels: %s" % file
 
                 # 检查每一行，看是否有重复信息
-                if np.unique(l, axis=0).shape[0] < l.shape[0]:  # duplicate rows
-                    nd += 1
+                if np.unique(label, axis=0).shape[0] < label.shape[0]:  # duplicate rows
+                    num_duplicate += 1
                 if single_cls:
-                    l[:, 0] = 0  # force dataset into single-class mode
-                self.labels[i] = l
-                nf += 1  # file found
+                    label[:, 0] = 0  # force dataset into single-class mode
+                self.labels[i] = label
+                num_found += 1  # file found
 
-                # create subdataset (a smaller dataset)
-                if create_datasubset and ns < 1E4:
-                    if ns == 0:
+                # create sub-dataset (a smaller dataset)
+                if create_data_subset and num_subset < 1E4:
+                    if num_subset == 0:
                         create_folder(path="./datasubset")
                         os.makedirs("./datasubset/images")
                     exclude_classes = 43
-                    if exclude_classes not in l[:, 0]:
-                        ns += 1
+                    if exclude_classes not in label[:, 0]:
+                        num_subset += 1
                         with open("./datasubset/images.txt", "a") as f:
                             f.write(self.img_files[i] + "\n")
 
@@ -205,7 +212,7 @@ class LoadImageAndLabels(Dataset):  # for training/testing
                     p = Path(self.img_files[i])
                     img = cv2.imread(str(p))
                     h, w = img.shape[:2]
-                    for j, x in enumerate(l):
+                    for j, x in enumerate(label):
                         f = "%s%sclassifier%s%g_%g_%s" % (p.parent.parent, os.sep, os.sep, x[0], j, p.name)
                         if not os.path.exists(Path(f).parent):
                             os.makedirs(Path(f).parent)  # make new output folder
@@ -218,35 +225,36 @@ class LoadImageAndLabels(Dataset):  # for training/testing
                         # 在宽和高方向添加padding
                         b[2:] = b[2:] * 1.3 + 30  # pad
                         # 将坐标格式从 x,y,w,h -> xmin,ymin,xmax,ymax
-                        b = xywh2xyxy(b.reshape(-1, 4)).revel().astype(np.int)
+                        b = xywh2ltrb(b.reshape(-1, 4)).revel().astype(np.int)
 
                         # 裁剪bbox坐标到图片内
                         b[[0, 2]] = np.clip[b[[0, 2]], 0, w]
                         b[[1, 3]] = np.clip[b[[1, 3]], 0, h]
                         assert cv2.imwrite(f, img[b[1]:b[3], b[0]:b[2]]), "Failure extracting classifier boxes"
             else:
-                ne += 1  # file empty
+                num_empty += 1  # file empty
 
             # 处理进度条只在第一个进程中显示
             if rank in [-1, 0]:
                 pbar.desc = "Caching labels %s (%g found, %g missing, %g empty, %g duplicate, for %g images)" % (
-                    s, nf, nm, ne, nd, n)
-        assert nf > 0 or n == 20288, "No labels found in %s. See %s" % (os.path.dirname(file) + os.sep, help_url)
+                    shapes, num_found, num_miss, num_empty, num_duplicate, num_files)
+        assert num_found > 0 or num_files == 20288, "No labels found in %s. See %s" % (
+            os.path.dirname(file) + os.sep, help_url)
 
         # 如果标签信息没有被保存成numpy的格式，且训练样本数大于1000则将标签信息保存成numpy的格式
-        if not labels_loaded and n > 1000:
+        if not labels_loaded and num_files > 1000:
             print("Saving labels to %s for faster future loading" % np_labels_path)
             np.save(np_labels_path, self.labels)  # save for next time
 
         # Cache images into memory for faster training (Warning: large datasets may exceed system RAM)
         if cache_images:  # if training
-            gb = 0  # Gigabytes of cached images 用于记录缓存图像占用RAM大小
+            gigabyte = 0  # Gigabytes of cached images 用于记录缓存图像占用RAM大小
             pbar = tqdm(range(len(self.img_files)), desc="Caching images")
-            self.img_hw0, self.img_hw = [None] * n, [None] * n
+            self.img_hw0, self.img_hw = [None] * num_files, [None] * num_files
             for i in pbar:  # max 10k images
                 self.imgs[i], self.img_hw0[i], self.img_hw[i] = load_image(self, i)  # img, hw_original, hw_resized
-                gb += self.imgs[i].nbytes  # 用于记录缓存图像占用RAM大小
-                pbar.desc = "Caching images (%.1fGB)" % (gb / 1E9)
+                gigabyte += self.imgs[i].nbytes  # 用于记录缓存图像占用RAM大小
+                pbar.desc = "Caching images (%.1fGB)" % (gigabyte / 1E9)
 
         # Detect corrupted images https://medium.com/joelthchao/programmatically-detect-corrupted-image-8c1b2006c3d3
         detect_corrupted_images = False
@@ -291,7 +299,7 @@ class LoadImageAndLabels(Dataset):  # for training/testing
                 labels[:, 4] = ratio[1] * h * (x[:, 2] + x[:, 4] / 2) + pad[1]
 
         if self.augment:
-            # Augment imagespace
+            # Augment image space
             if not self.mosaic:
                 img, labels = random_affine(img, labels,
                                             degrees=hyp["degrees"],
@@ -299,13 +307,13 @@ class LoadImageAndLabels(Dataset):  # for training/testing
                                             scale=hyp["scale"],
                                             shear=hyp["shear"])
 
-            # Augment colorspace
+            # Augment color space
             augment_hsv(img, h_gain=hyp["hsv_h"], s_gain=hyp["hsv_s"], v_gain=hyp["hsv_v"])
 
-        nL = len(labels)  # number of labels
-        if nL:
-            # convert xyxy to xywh
-            labels[:, 1:5] = xyxy2xywh(labels[:, 1:5])
+        num_labels = len(labels)  # number of labels
+        if num_labels:
+            # convert ltrb to xywh
+            labels[:, 1:5] = ltrb2xywh(labels[:, 1:5])
 
             # Normalize coordinates 0-1
             labels[:, [2, 4]] /= img.shape[0]  # height
@@ -316,18 +324,18 @@ class LoadImageAndLabels(Dataset):  # for training/testing
             lr_flip = True
             if lr_flip and random.random() < 0.5:
                 img = np.fliplr(img)
-                if nL:
+                if num_labels:
                     labels[:, 1] = 1 - labels[:, 1]  # 1 - x_center
 
             # random up-down flip
             ud_flip = False
             if ud_flip and random.random() < 0.5:
                 img = np.flipud(img)
-                if nL:
+                if num_labels:
                     labels[:, 2] = 1 - labels[:, 2]  # 1 - y_center
 
-        labels_out = torch.zeros((nL, 6))  # nL: number of labels
-        if nL:
+        labels_out = torch.zeros((num_labels, 6))  # nL: number of labels
+        if num_labels:
             # labels_out[:, 0] = index
             labels_out[:, 1:] = torch.from_numpy(labels)
 
@@ -386,65 +394,70 @@ def load_image(self, index):
         return self.imgs[index], self.img_hw0[index], self.img_hw[index]  # img, hw_original, hw_resized
 
 
-def load_mosaic(self, index):
+def load_mosaic(imgs, index):
     """
     将四张图片拼接在一张马赛克图像中
-    :param self:
+    :param imgs:
     :param index: 需要获取的图像索引
     :return:
     """
     # loads images in a mosaic
 
     labels4 = []  # 拼接图像的label信息
-    s = self.img_size
+    s = imgs.img_size
     # 随机初始化拼接图像的中心点坐标
     xc, yc = [int(random.uniform(s * 0.5, s * 1.5)) for _ in range(2)]  # mosaic center x, y
     # 从dataset中随机寻找三张图像进行拼接
-    indices = [index] + [random.randint(0, len(self.labels) - 1) for _ in range(3)]  # 3 additional image indices
+    indices = [index] + [random.randint(0, len(imgs.labels) - 1) for _ in range(3)]  # 3 additional image indices
+
+    img4 = None  # base image with 4 tiles
+    ll, tl, rl, bl = 0, 0, 0, 0  # large image: (l, t, r, b)
+    ls, ts, rs, bs = 0, 0, 0, 0  # small image: (l, t, r, b)
+
     # 遍历四张图像进行拼接
     for i, index in enumerate(indices):
         # load image
-        img, _, (h, w) = load_image(self, index)
+        img, _, (h, w) = load_image(imgs, index)
 
         # place img in img4
         if i == 0:  # top left
             # 创建马赛克图像
-            img4 = np.full((s * 2, s * 2, img.shape[2]), 114, dtype=np.uint8)  # base image with 4 tiles
+            img4 = np.full((s * 2, s * 2, img.shape[2]), 114, dtype=np.uint8)
             # 计算马赛克图像中的坐标信息(将图像填充到马赛克图像中)
-            x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc  # xmin, ymin, xmax, ymax (large image)
+            ll, tl, rl, bl = max(xc - w, 0), max(yc - h, 0), xc, yc
             # 计算截取的图像区域信息(以xc,yc为第一张图像的右下角坐标填充到马赛克图像中，丢弃越界的区域)
-            x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h  # xmin, ymin, xmax, ymax (small image)
+            ls, ts, rs, bs = w - (rl - ll), h - (bl - tl), w, h
         elif i == 1:  # top right
             # 计算马赛克图像中的坐标信息(将图像填充到马赛克图像中)
-            x1a, y1a, x2a, y2a = xc, max(yc - h, 0), min(xc + w, s * 2), yc
+            ll, tl, rl, bl = xc, max(yc - h, 0), min(xc + w, s * 2), yc
             # 计算截取的图像区域信息(以xc,yc为第二张图像的左下角坐标填充到马赛克图像中，丢弃越界的区域)
-            x1b, y1b, x2b, y2b = 0, h - (y2a - y1a), min(w, x2a - x1a), h
+            ls, ts, rs, bs = 0, h - (bl - tl), min(w, rl - ll), h
         elif i == 2:  # bottom left
             # 计算马赛克图像中的坐标信息(将图像填充到马赛克图像中)
-            x1a, y1a, x2a, y2a = max(xc - w, 0), yc, xc, min(s * 2, yc + h)
+            ll, tl, rl, bl = max(xc - w, 0), yc, xc, min(s * 2, yc + h)
             # 计算截取的图像区域信息(以xc,yc为第三张图像的右上角坐标填充到马赛克图像中，丢弃越界的区域)
-            x1b, y1b, x2b, y2b = w - (x2a - x1a), 0, max(xc, w), min(y2a - y1a, h)
+            ls, ts, rs, bs = w - (rl - ll), 0, max(xc, w), min(bl - tl, h)
         elif i == 3:  # bottom right
             # 计算马赛克图像中的坐标信息(将图像填充到马赛克图像中)
-            x1a, y1a, x2a, y2a = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
+            ll, tl, rl, bl = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
             # 计算截取的图像区域信息(以xc,yc为第四张图像的左上角坐标填充到马赛克图像中，丢弃越界的区域)
-            x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
+            ls, ts, rs, bs = 0, 0, min(w, rl - ll), min(bl - tl, h)
 
         # 将截取的图像区域填充到马赛克图像的相应位置
-        img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
+        img4[tl:bl, ll:rl] = img[ts:bs, ls:rs]  # img4[ymin:ymax, xmin:xmax]
         # 计算pad(图像边界与马赛克边界的距离，越界的情况为负值)
-        padw = x1a - x1b
-        padh = y1a - y1b
+        pad_w = ll - ls
+        pad_h = tl - ts
 
         # Labels 获取对应拼接图像的labels信息
-        x = self.labels[index]
+        x = imgs.labels[index]
         labels = x.copy()  # 深拷贝，防止修改原数据
         if x.size > 0:  # Normalized xywh to pixel xyxy format
             # 计算标注数据在马赛克图像中的
-            labels[:, 1] = w * (x[:, 1] - x[:, 3] / 2) + padw
-            labels[:, 2] = h * (x[:, 2] - x[:, 4] / 2) + padh
-            labels[:, 3] = w * (x[:, 1] + x[:, 3] / 2) + padw
-            labels[:, 4] = h * (x[:, 2] + x[:, 4] / 2) + padh
+            labels[:, 1] = w * (x[:, 1] - x[:, 3] / 2) + pad_w
+            labels[:, 2] = h * (x[:, 2] - x[:, 4] / 2) + pad_h
+            labels[:, 3] = w * (x[:, 1] + x[:, 3] / 2) + pad_w
+            labels[:, 4] = h * (x[:, 2] + x[:, 4] / 2) + pad_h
         labels4.append(labels)
 
     # Concat/clip labels
@@ -456,10 +469,10 @@ def load_mosaic(self, index):
     # Augment
     # img4 = img4[s // 2: int(s * 1.5), s // 2:int(s * 1.5)]  # center crop (WARNING, requires box pruning)
     img4, labels4 = random_affine(img4, labels4,
-                                  degrees=self.hyp['degrees'],
-                                  translate=self.hyp['translate'],
-                                  scale=self.hyp['scale'],
-                                  shear=self.hyp['shear'],
+                                  degrees=imgs.hyp['degrees'],
+                                  translate=imgs.hyp['translate'],
+                                  scale=imgs.hyp['scale'],
+                                  shear=imgs.hyp['shear'],
                                   border=-s // 2)  # border to remove
 
     return img4, labels4
@@ -468,7 +481,7 @@ def load_mosaic(self, index):
 def random_affine(img, targets=(), degrees=10, translate=.1, scale=.1, shear=10, border=0):
     # torchvision.transforms.RandomAffine(degrees=(-10, 10), translate=(.1, .1), scale=(.9, 1.1), shear=(-10, 10))
     # https://medium.com/uruvideo/dataset-augmentation-with-random-homographies-a8f4b44830d4
-    # targets = [cls, xyxy]
+    # targets = [cls, ltrb]
 
     # 给定的输入图像的尺寸(416/512/640)，等于img4.shape / 2
     height = img.shape[0] + border * 2
@@ -511,15 +524,6 @@ def random_affine(img, targets=(), degrees=10, translate=.1, scale=.1, shear=10,
         y = xy[:, [1, 3, 5, 7]]  # [n, 4]
         xy = np.concatenate((x.min(1), y.min(1), x.max(1), y.max(1))).reshape(4, n).T  # [n, 4]
 
-        # # apply angle-based reduction of bounding boxes
-        # radians = a * math.pi / 180
-        # reduction = max(abs(math.sin(radians)), abs(math.cos(radians))) ** 0.5
-        # x = (xy[:, 2] + xy[:, 0]) / 2
-        # y = (xy[:, 3] + xy[:, 1]) / 2
-        # w = (xy[:, 2] - xy[:, 0]) * reduction
-        # h = (xy[:, 3] - xy[:, 1]) * reduction
-        # xy = np.concatenate((x - w / 2, y - h / 2, x + w / 2, y + h / 2)).reshape(4, n).T
-
         # reject warped points outside of image
         # 对坐标进行裁剪，防止越界
         xy[:, [0, 2]] = xy[:, [0, 2]].clip(0, width)
@@ -554,11 +558,6 @@ def augment_hsv(img, h_gain=0.5, s_gain=0.5, v_gain=0.5):
 
     img_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val))).astype(dtype)
     cv2.cvtColor(img_hsv, cv2.COLOR_HSV2BGR, dst=img)  # no return needed
-
-    # Histogram equalization
-    # if random.random() < 0.2:
-    #     for i in range(3):
-    #         img[:, :, i] = cv2.equalizeHist(img[:, :, i])
 
 
 def letterbox(img: np.ndarray,
@@ -613,11 +612,7 @@ def letterbox(img: np.ndarray,
 
 
 def create_folder(path="./new_folder"):
-    # Create floder
+    # Create folder
     if os.path.exists(path):
-        shutil.rmtree(path)  # dalete output folder
+        shutil.rmtree(path)  # delete output folder
     os.makedirs(path)  # make new output folder
-
-
-
-

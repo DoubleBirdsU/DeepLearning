@@ -431,14 +431,17 @@ class ResBlockA(ResBlock):
 class ResBlockB(ResBlock):
     def __init__(self, in_ch, out_ch, stride=1, mid_ch=None, pool_size=1, residual_path='equal'):
         super(ResBlockB, self).__init__()
-        self.res_fun = nn.Sequential(
+        self.res_list = list([
             ConvSameBnRelu(in_ch, mid_ch, 1),
             ConvSameBnRelu(mid_ch, mid_ch, 3, stride=stride),
             FeatureExtractor(mid_ch, out_ch, 1, padding='same', bn=True),
-        )
+        ])
         self.shortcut = self.make_shortcut(in_ch, out_ch, pool_size, residual_path)
         self.act = nn.ReLU(inplace=True)
-        self.addLayers([self.res_fun, self.shortcut, self.act])
+        self.addLayers([self.res_list, self.shortcut, self.act])
 
     def forward(self, x):
-        return self.act(self.res_fun(x) + self.shortcut(x))
+        y = self.shortcut(x)
+        for layer in self.res_list:
+            x = layer(x)
+        return self.act(x + y)

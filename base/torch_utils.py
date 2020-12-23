@@ -160,7 +160,6 @@ class ModelEMA:
     GPU assignment and distributed training wrappers.
     I've tested with the sequence in my own train.py for torch.DataParallel, apex.DDP, and single-GPU.
     """
-
     def __init__(self, model, decay=0.9999, device=''):
         # make a copy of the model for accumulating moving average of weights
         self.ema = deepcopy(model)

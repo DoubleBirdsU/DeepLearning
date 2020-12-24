@@ -175,3 +175,7 @@ $$
 
 ![SSD.png](images/img.png)
 
+
+
+![image-20201223191609280](images/ssd-loss.png)
+

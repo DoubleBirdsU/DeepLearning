@@ -252,16 +252,17 @@ class NNet(Module):
         count_batch = (count_data + batch_size - 1) // batch_size
         for batch_idx, (data, y_true) in enumerate(train_loader):
             data, y_true = data.to(self.device), y_true.to(self.device)
-            self.optimizer.zero_grad()
-            y_pred = self(data)
-            loss = self.loss(y_pred, y_true)
-            loss.backward()
-            self.optimizer.step()
+            if data.shape[0] > 1:
+                self.optimizer.zero_grad()
+                y_pred = self(data)
+                loss = self.loss(y_pred, y_true)
+                loss.backward()
+                self.optimizer.step()
 
-            # 输出信息
-            num_data += len(data)
-            loss_mean = (loss_mean * batch_idx + loss) / (batch_idx + 1)
-            correct += self._get_correct(y_pred, y_true) if self.metrics else 0.
+                # 输出信息
+                num_data += len(data)
+                loss_mean = (loss_mean * batch_idx + loss) / (batch_idx + 1)
+                correct += self._get_correct(y_pred, y_true) if self.metrics else 0.
             msg = self._print_cover(loss_mean, correct, num_data, batch_idx + 1, count_batch)
             print_cover(msg)
 

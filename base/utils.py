@@ -269,7 +269,7 @@ def compute_ap(recall, precision):
     return ap
 
 
-def bbox_iou(box1, box2, ltrb=True, iou_type='IoU', delta=1e-9):
+def bbox_iou(box1, box2, ltrb=True, iou_type='IoU', offset_iou='valid', delta=1e-9):
     """bbox_iou
         left-top Coordinate System.
 
@@ -282,6 +282,7 @@ def bbox_iou(box1, box2, ltrb=True, iou_type='IoU', delta=1e-9):
         box2: box2 position description, as above.
         ltrb: bool, box position data is type of 'ltrb', default True.
         iou_type: 'IoU', 'GIoU', 'DIoU', 'CIoU', it isn't sensitive to upper or lower, default 'IoU'.
+        offset_iou: when iou_type = 'IoU' offset_iou is valid. 'valid', 'first', 'last'
         delta: precision or disturbance, default 1e-16
 
     Returns:
@@ -293,7 +294,7 @@ def bbox_iou(box1, box2, ltrb=True, iou_type='IoU', delta=1e-9):
     wh1, wh2 = rb1 - lt1, rb2 - lt2  # weight, height
 
     # Intersection area
-    inter = ((torch.min(rb1, rb2) - torch.max(lt1, lt2)).clamp(0)).prod(0)
+    inter = ((torch.minimum(rb1, rb2) - torch.maximum(lt1, lt2)).clamp(0)).prod(0)
 
     # Union Area, union = (s1 + s2 - inter) + delta, delta = 1e-16
     union = wh1.prod(0) + wh2.prod(0) - inter + delta
@@ -319,10 +320,17 @@ def bbox_iou(box1, box2, ltrb=True, iou_type='IoU', delta=1e-9):
                 with torch.no_grad():
                     alpha = v / (1 - iou + v)
                 iou -= (rho / convex + v * alpha)  # CIoU
+    elif offset_iou != 'valid':
+        iou = inter / (wh1.prod(0) if offset_iou == 'first' else wh2.prod(0))
+
     return iou
 
 
 def init_boxes(box):
+    if not isinstance(box, torch.Tensor):
+        box = torch.Tensor(box)
+        if len(box.shape) == 1:
+            box = box.reshape([-1, 1])
     return [box[:2], box[2:]]
 
 

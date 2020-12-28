@@ -50,9 +50,13 @@ class SSDBlock(NNet):
 
 
 class BackBone(NNet):
+    """BackBone
+        引入 RoIPooling
+    """
     def __init__(self, num_cls=21, img_size=(3, 300, 300), num_anchor=4):
         super(BackBone, self).__init__()
         self.resnet = ResNet(num_cls, img_size, num_res_block=4, include_top=False)
+        self.roi = nn.AdaptiveMaxPool2d((38, 38))
         in_ch, out_ch, mid_ch = self.resnet.in_chs[-1], self.resnet.out_chs[-1], self.resnet.mid_chs[-1]
         self.classifier = SSDClassifier(self.resnet.out_ch_last, num_cls, num_anchor)
         self.res_conv5 = ResConvBlock(in_ch, out_ch, mid_ch, 3, ResBlockB)
@@ -69,6 +73,7 @@ class BackBone(NNet):
 
     def forward(self, x):
         x = self.resnet(x)
+        x = self.roi(x)
         anchors = self.classifier(x)
         x = self.res_conv5(x)
         return x, anchors
@@ -103,7 +108,7 @@ class SSDLoss(Module):
         self.scale_neg = scale_neg
         self.default_box = self.get_default_box()
         self.smooth_l1 = nn.SmoothL1Loss()
-        self.log_softmax = nn.LogSoftmax(dim=-1)
+        self.log_softmax = nn.LogSoftmax(dim=0)
         pass
 
     def forward(self, y_pred, y_true):
@@ -135,6 +140,7 @@ class SSDLoss(Module):
         # Pos
         pos_box_mask = self.get_pos_mask(y_true)
         pos_mask = pos_box_mask[:, 0]
+        true_label = pos_box_mask[:, 1]
 
         # loc loss
         hat_box = torch.Tensor(self.get_hat(pos_box_mask)).to(pred_box.device)
@@ -142,14 +148,15 @@ class SSDLoss(Module):
         loc_loss = self.smooth_l1(pred_pos_box, hat_box).mean()
 
         # conf loss
-        conf_pos = pred_label[pos_box_mask[:, 1], pos_mask]
+        conf_pos = -self.log_softmax(pred_label[:, pos_mask])
+        conf_pos = conf_pos[true_label, range(len(true_label))]
 
-        max_pred_conf, _ = torch.max(pred_label[1:], dim=0)
         neg_mask = np.array(np.ones(pred_box.shape[-1], dtype=np.bool))
         neg_mask[np.array(pos_mask, dtype=np.int32)] = False
-        conf_neg, _ = torch.topk(max_pred_conf[neg_mask], len(pos_mask) * self.scale_neg)
+        conf_neg = -self.log_softmax(pred_label[:, neg_mask])
+        conf_neg, _ = torch.topk(conf_neg[0], len(pos_mask) * self.scale_neg)
 
-        conf_loss = -self.log_softmax(conf_pos).mean() - self.log_softmax(conf_neg).mean()
+        conf_loss = conf_pos.mean() + conf_neg.mean()
         return loc_loss + conf_loss
 
     def get_default_box(
@@ -272,7 +279,6 @@ class SSDLoss(Module):
 
         Args:
             gt_box: ground truth box
-            dtype:
 
         Returns:
             Tensor

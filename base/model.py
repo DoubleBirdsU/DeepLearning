@@ -254,6 +254,38 @@ class NNet(Module):
                 if self.checkpoint_fn is not None:
                     self.checkpoint_fn(self, accuracy=acc_cur, loss=loss)
 
+    def evaluate(self, test_loader, batch_size):
+        """evaluate
+
+        Args:
+            test_loader:
+            batch_size:
+
+        Returns:
+            None
+        """
+        self.eval()
+        correct = 0
+        num_data = 0
+        loss_mean = 0.0
+        count_data = len(test_loader.dataset)
+        count_batch = (count_data + batch_size - 1) // batch_size
+        with torch.no_grad():
+            for batch_idx, (data, y_true) in enumerate(test_loader):
+                data, y_true = data.to(self.device), y_true.to(self.device)
+                if data.shape[0] > 1:
+                    y_pred = self(data)
+                    loss = self.loss(y_pred, y_true).clone()
+
+                    # 输出信息
+                    num_data += len(data)
+                    loss_mean = (loss_mean * batch_idx + loss) / (batch_idx + 1)
+                    correct += self._get_correct(y_pred, y_true) if self.metrics else 0.
+
+                msg = self._print_cover(loss_mean, correct, num_data, batch_idx + 1, count_batch)
+                print_cover(msg)
+        print('')
+
     def train_once(self, train_loader, batch_size):
         """train_once
 
@@ -392,6 +424,19 @@ class NNet(Module):
         if roi_size is None:
             roi_size = output_size
         return output_size.minimum(roi_size)
+
+    def load_weights(self, file_weight, mode='weight'):
+        """load_weights
+
+        Args:
+            file_weight (str):
+            mode:
+        """
+        is_exist = os.path.exists(file_weight)
+        if is_exist:
+            if 'weight' == mode:
+                self.load_state_dict(torch.load(file_weight))
+        return is_exist
 
     def _make_callbacks(self, callbacks):
         if callbacks is None:

@@ -246,16 +246,16 @@ class NNet(Module):
         for epoch in range(1, epochs + 1):
             print(f'Epoch {epoch}/{epochs}:')
             self.epoch = epoch
-            self.train_once(train_data, batch_size)
+            self.train_once(train_data,
+                            batch_size,
+                            validation_data=validation_data,
+                            validation_steps=validation_steps,
+                            validation_batch_size=validation_batch_size)
             if epoch % validation_freq == 0 or epoch == epochs:
-                loss, acc_cur = self.valid_once(validation_data)
+                self.valid_once(validation_data, self.checkpoint_fn)
 
-                # checkpoint
-                if self.checkpoint_fn is not None:
-                    self.checkpoint_fn(self, accuracy=acc_cur, loss=loss)
-
-    def evaluate(self, test_loader, batch_size):
-        """evaluate
+    def evaluate_generator(self, test_loader, batch_size):
+        """evaluate_generator
 
         Args:
             test_loader:
@@ -286,12 +286,23 @@ class NNet(Module):
                 print_cover(msg)
         print('')
 
-    def train_once(self, train_loader, batch_size):
+    def train_once(self,
+                   train_loader,
+                   batch_size,
+                   validation_bool=None,
+                   validation_data=None,
+                   validation_steps=None,
+                   validation_batch_size=None,
+        ):
         """train_once
 
         Args:
             train_loader:
             batch_size:
+            validation_bool:
+            validation_data:
+            validation_steps:
+            validation_batch_size:
 
         Returns:
             None
@@ -315,10 +326,24 @@ class NNet(Module):
                 num_data += len(data)
                 loss_mean = (loss_mean * batch_idx + loss) / (batch_idx + 1)
                 correct += self._get_correct(y_pred, y_true) if self.metrics else 0.
+
             msg = self._print_cover(loss_mean, correct, num_data, batch_idx + 1, count_batch)
             print_cover(msg)
 
-    def valid_once(self, valid_loader):
+            # 测试
+            if None != validation_batch_size and 0 == (batch_idx + 1) % validation_batch_size:
+                self.valid_once(validation_data, self.checkpoint_fn)
+
+    def valid_once(self, valid_loader, checkpoint_fn=None):
+        """valid_once
+
+        Args:
+            valid_loader:
+            checkpoint_fn:
+
+        Returns:
+            None
+        """
         self.eval()
         correct = 0
         loss_mean = 0.
@@ -333,6 +358,11 @@ class NNet(Module):
         loss_mean /= len(valid_loader.dataset)
         val_acc = 1. * correct / len(valid_loader.dataset)
         print(self._make_msg(loss_mean, val_acc, 'val_'))
+
+        # checkpoint
+        if self.checkpoint_fn is not None:
+            self.checkpoint_fn(self, accuracy=val_acc, loss=loss_mean)
+
         return loss_mean, val_acc
 
     def get_parameters(self, opt_type='adam', call_params=None, **kwargs):
@@ -480,6 +510,8 @@ class LeNet(NNet):
 
         Args:
             num_cls (int, optional): the number of classes. Defaults to 10.
+            img_size:
+            roi_size:
 
         Returns:
             None
@@ -596,6 +628,9 @@ class ResNet(NNet):
         Args:
             num_cls:
             img_size:
+            num_res_block:
+            include_top:
+            roi_size:
 
         Returns:
             None

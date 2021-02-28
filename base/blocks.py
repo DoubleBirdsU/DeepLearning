@@ -105,6 +105,13 @@ class ConcatBlock(Module):
 
 class InceptionBlock_v1A(ConcatBlock):
     def __init__(self, in_ch, out_ch):
+        """InceptionBlock_v1A
+        __init__ 构造函数
+
+        Args:
+            in_ch (None): 输入维度
+            out_ch (None): 输出维度
+        """
         super(InceptionBlock_v1A, self).__init__(out_ch)
         self.inc_list = [
             ConvSameBnRelu(in_ch, self.out_ch, 1, stride=2),
@@ -156,7 +163,7 @@ class InceptionBlock_v1B(ConcatBlock):
 
 class InceptionBlock_v3A(ConcatBlock):
     def __init__(self, in_ch, out_ch):
-        """InceptionBlock_v1B
+        """InceptionBlock_v3A
             c1-s2, c3-s2, c5-s2, pool-s2
 
             c1-s2: Conv1-s2
@@ -196,7 +203,7 @@ class InceptionBlock_v3A(ConcatBlock):
 
 class InceptionBlock_v3B(ConcatBlock):
     def __init__(self, in_ch, out_ch, kernel_n=3):
-        """InceptionBlock_v1B
+        """InceptionBlock_v3B
             c1-s2, c3-s2, c5-s2, pool-s2
 
             c1-s2: Conv1-s2
@@ -441,7 +448,7 @@ class ResBlockB(ResBlock):
         self.addLayers([self.res_list, self.shortcut, self.act])
 
     def forward(self, x):
-        y = self.shortcut(x)
         for layer in self.res_list:
             x = layer(x)
+        y = self.shortcut(x)
         return self.act(x + y)

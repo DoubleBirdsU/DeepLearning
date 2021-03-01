@@ -703,7 +703,7 @@ def kmean_anchors(path='./data/coco64.txt', n=9, img_size=(640, 640), thr=0.20, 
             print('%i,%i' % (round(x[0]), round(x[1])), end=',  ' if i < len(k) - 1 else '\n')  # use in *.cfg
         return k
 
-    def fitness(k):  # mutation fitness
+    def fit_ness(k):  # mutation fitness
         iou = wh_iou(wh, torch.Tensor(k))  # iou
         max_iou = iou.max(1)[0]
         return (max_iou * (max_iou > thr).float()).mean()  # product
@@ -729,13 +729,13 @@ def kmean_anchors(path='./data/coco64.txt', n=9, img_size=(640, 640), thr=0.20, 
 
     # Evolve
     npr = np.random
-    f, shape, mp, sigma = fitness(k), k.shape, 0.9, 0.1  # fitness, generations, mutation prob, sigma
+    f, shape, mp, sigma = fit_ness(k), k.shape, 0.9, 0.1  # fitness, generations, mutation prob, sigma
     for _ in tqdm(range(gen), desc='Evolving anchors'):
         v = np.ones(shape)
         while (v == 1).all():  # mutate until a change occurs (prevent duplicates)
             v = ((npr.random(shape) < mp) * npr.random() * npr.randn(*shape) * sigma + 1).clip(0.3, 3.0)
         kg = (k.copy() * v).clip(min=2.0)
-        fg = fitness(kg)
+        fg = fit_ness(kg)
         if fg > f:
             f, k = fg, kg.copy()
             print_results(k)
@@ -865,6 +865,22 @@ def plot_wh_methods():  # from utils.utils import *; plot_wh_methods()
 
 
 def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max_size=640, max_subplots=16):
+    """plot_images 绘制边框
+
+    [extended_summary]
+
+    Args:
+        images (None): [description]
+        targets (None): [description]
+        paths (None, optional): [description]. Defaults to None.
+        fname (str, optional): [description]. Defaults to 'images.jpg'.
+        names (None, optional): [description]. Defaults to None.
+        max_size (int, optional): [description]. Defaults to 640.
+        max_subplots (int, optional): [description]. Defaults to 16.
+
+    Returns:
+        None: [description]
+    """
     tl = 3  # line thickness
     tf = max(tl - 1, 1)  # font thickness
     if os.path.isfile(fname):  # do not overwrite
@@ -993,23 +1009,23 @@ def plot_targets_txt():  # from utils.utils import *; plot_targets_txt()
 
 def plot_labels(labels):
     # plot dataset labels
-    c, b = labels[:, 0], labels[:, 1:].transpose()  # classees, boxes
+    cls, boxes = labels[:, 0], labels[:, 1:].transpose()  # classes, boxes
 
     def hist2d(x, y, n=100):
-        xedges, yedges = np.linspace(x.min(), x.max(), n), np.linspace(y.min(), y.max(), n)
-        hist, xedges, yedges = np.histogram2d(x, y, (xedges, yedges))
-        xidx = np.clip(np.digitize(x, xedges) - 1, 0, hist.shape[0] - 1)
-        yidx = np.clip(np.digitize(y, yedges) - 1, 0, hist.shape[1] - 1)
-        return hist[xidx, yidx]
+        x_edges, y_edges = np.linspace(x.min(), x.max(), n), np.linspace(y.min(), y.max(), n)
+        hist, x_edges, y_edges = np.histogram2d(x, y, (x_edges, y_edges))
+        x_idx = np.clip(np.digitize(x, x_edges) - 1, 0, hist.shape[0] - 1)
+        y_idx = np.clip(np.digitize(y, y_edges) - 1, 0, hist.shape[1] - 1)
+        return hist[x_idx, y_idx]
 
     fig, ax = plt.subplots(2, 2, figsize=(8, 8), tight_layout=True)
     ax = ax.ravel()
-    ax[0].hist(c, bins=int(c.max() + 1))
+    ax[0].hist(cls, bins=int(cls.max() + 1))
     ax[0].set_xlabel('classes')
-    ax[1].scatter(b[0], b[1], c=hist2d(b[0], b[1], 90), cmap='jet')
+    ax[1].scatter(boxes[0], boxes[1], c=hist2d(boxes[0], boxes[1], 90), cmap='jet')
     ax[1].set_xlabel('x')
     ax[1].set_ylabel('y')
-    ax[2].scatter(b[2], b[3], c=hist2d(b[2], b[3], 90), cmap='jet')
+    ax[2].scatter(boxes[2], boxes[3], c=hist2d(boxes[2], boxes[3], 90), cmap='jet')
     ax[2].set_xlabel('width')
     ax[2].set_ylabel('height')
     plt.savefig('labels.png', dpi=200)
@@ -1070,8 +1086,8 @@ def plot_results(start=0, stop=0, bucket='', id=()):  # from utils.utils import 
     for f in sorted(files):
         try:
             results = np.loadtxt(f, usecols=[2, 3, 4, 8, 9, 12, 13, 14, 10, 11], ndmin=2).T
-            n = results.shape[1]  # number of rows
-            x = range(start, min(stop, n) if stop else n)
+            num_row = results.shape[1]  # number of rows
+            x = range(start, min(stop, num_row) if stop else num_row)
             for i in range(10):
                 y = results[i, x]
                 if i in [0, 1, 2, 5, 6, 7]:
@@ -1115,9 +1131,16 @@ class ModelPath(object):
     @staticmethod
     def generateFolderPath(folder, path):
         """
-            :rtype: str
-            :type folder: str
-            :type path: str
+        generateFolderPath 生成文件夹路径
+
+        [extended_summary]
+
+        Args:
+            folder (str): 文件夹名
+            path (str): 路径
+
+        Returns:
+            str: 文件夹路径
         """
         return path + os.sep + folder + os.sep
 
@@ -1125,26 +1148,47 @@ class ModelPath(object):
     @staticmethod
     def generateName(file_name, filetype, path=None):
         """
-            :rtype: str
-            :type file_name: str
-            :type filetype: str
-            :type path: str
+        generateName 生成名称
+
+        `[extended_summary]`
+
+        Args:
+            file_name (str): 文件名
+            filetype (str): 文件类型
+            path (str, optional): 文件路径. Defaults to None.
+
+        Returns:
+            str: 文件路径
         """
         return path + file_name + filetype
 
     # 生成模型路径
     def generateModelName(self, model_name, filetype=model_type):
         """
-            :rtype: str
-            :type model_name: str
-            :type filetype: str
+        generateModelName 生成模型路径
+
+        [extended_summary]
+
+        Args:
+            model_name (str): 模型名成
+            filetype (str, optional): 模型类型. Defaults to model_type.
+
+        Returns:
+            str: 模型路径
         """
         return self.generateName(model_name + '_model', filetype, self.generateFolderPath(model_name, ))
 
     def generateWeightName(self, model_name, filetype='.txt'):
         """
-            :rtype: str
-            :type model_name: str
-            :type filetype: str
+        generateWeightName 生成权重路径名
+
+        [extended_summary]
+
+        Args:
+            model_name (str): 模型名称
+            filetype (str, optional): 文件类型. Defaults to '.txt'.
+
+        Returns:
+            str: 权重路径
         """
         return self.generateName(model_name + '_weights', filetype, self.generateFolderPath(model_name, ))

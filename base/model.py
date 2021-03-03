@@ -150,6 +150,7 @@ class DatasetCheck(nn.Module):
         处理 loss 输入前 y_pred, y_true 数据
 
     """
+
     def __init__(self, trans_fn=None):
         super(DatasetCheck, self).__init__()
         self.trans_fn = trans_fn
@@ -293,7 +294,7 @@ class NNet(Module):
                    validation_data=None,
                    validation_steps=None,
                    validation_batch_size=None,
-        ):
+                   ):
         """train_once
 
         Args:
@@ -331,7 +332,7 @@ class NNet(Module):
             print_cover(msg)
 
             # 测试
-            if None != validation_batch_size and 0 == (batch_idx + 1) % validation_batch_size:
+            if validation_batch_size is not None and 0 == (batch_idx + 1) % validation_batch_size:
                 self.valid_once(validation_data, self.checkpoint_fn)
 
     def valid_once(self, valid_loader, checkpoint_fn=None):
@@ -449,7 +450,7 @@ class NNet(Module):
 
     @staticmethod
     def get_roi_size(roi_size, in_shape, down_size=32, channels_bias=0, shape_bias=0):
-        output_size: torch.Tensor = (torch.Tensor(in_shape).int() + down_size - 1 - shape_bias) //\
+        output_size: torch.Tensor = (torch.Tensor(in_shape).int() + down_size - 1 - shape_bias) // \
                                     down_size - channels_bias
         if roi_size is None:
             roi_size = output_size

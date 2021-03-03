@@ -369,14 +369,14 @@ class IncResBlock_v4B(ConcatBlock):
 
 
 class ResConvBlock(ModuleBlock):
-    def __init__(self, in_ch, out_ch, mid_ch, num_layer, res_block, residual_path_first='conv'):
+    def __init__(self, in_ch, out_ch, hid_ch, num_layer, res_block, residual_path_first='conv'):
         """ResConvBlock
             residual_path
 
         Args:
             in_ch:
             out_ch:
-            mid_ch:
+            hid_ch:
             num_layer:
             res_block:
             residual_path_first:
@@ -385,15 +385,15 @@ class ResConvBlock(ModuleBlock):
             None
         """
         super(ResConvBlock, self).__init__()
-        self.blocks.append(res_block(in_ch, out_ch, mid_ch=mid_ch, residual_path=residual_path_first))
+        self.blocks.append(res_block(in_ch, out_ch, mid_ch=hid_ch, residual_path=residual_path_first))
         for i in range(1, num_layer - 1):
-            self.blocks.append(res_block(out_ch, out_ch, mid_ch=mid_ch, residual_path='equal'))
-        self.blocks.append(res_block(out_ch, out_ch, stride=2, mid_ch=mid_ch, residual_path='pool'))
+            self.blocks.append(res_block(out_ch, out_ch, mid_ch=hid_ch, residual_path='equal'))
+        self.blocks.append(res_block(out_ch, out_ch, stride=2, mid_ch=hid_ch, residual_path='pool'))
         self.addLayers(self.blocks)
 
     @staticmethod
-    def double_channels(in_ch, out_ch, mid_ch):
-        return in_ch * 2, out_ch * 2, mid_ch * 2
+    def double_channels(in_ch, out_ch, hid_ch):
+        return in_ch * 2, out_ch * 2, hid_ch * 2
 
 
 class ResBlock(Module):
@@ -421,11 +421,11 @@ class ResBlock(Module):
 
 
 class ResBlockA(ResBlock):
-    def __init__(self, in_ch, out_ch, stride=1, mid_ch=None, pool_size=1, residual_path='equal'):
+    def __init__(self, in_ch, out_ch, stride=1, hid_ch=None, pool_size=1, residual_path='equal'):
         super(ResBlockA, self).__init__()
         self.res_fun = nn.Sequential(
-            ConvSameBnRelu(in_ch, mid_ch, 3),
-            FeatureExtractor(mid_ch, out_ch, 3, stride=stride, padding='same', bn=True),
+            ConvSameBnRelu(in_ch, hid_ch, 3),
+            FeatureExtractor(hid_ch, out_ch, 3, stride=stride, padding='same', bn=True),
         )
         self.shortcut = self.make_shortcut(in_ch, out_ch, pool_size, residual_path)
         self.act = nn.ReLU(inplace=True)
@@ -436,12 +436,12 @@ class ResBlockA(ResBlock):
 
 
 class ResBlockB(ResBlock):
-    def __init__(self, in_ch, out_ch, stride=1, mid_ch=None, pool_size=1, residual_path='equal'):
+    def __init__(self, in_ch, out_ch, stride=1, hid_ch=None, pool_size=1, residual_path='equal'):
         super(ResBlockB, self).__init__()
         self.res_list = list([
-            ConvSameBnRelu(in_ch, mid_ch, 1),
-            ConvSameBnRelu(mid_ch, mid_ch, 3, stride=stride),
-            FeatureExtractor(mid_ch, out_ch, 1, padding='same', bn=True),
+            ConvSameBnRelu(in_ch, hid_ch, 1),
+            ConvSameBnRelu(hid_ch, hid_ch, 3, stride=stride),
+            FeatureExtractor(hid_ch, out_ch, 1, padding='same', bn=True),
         ])
         self.shortcut = self.make_shortcut(in_ch, out_ch, pool_size, residual_path)
         self.act = nn.ReLU(inplace=True)

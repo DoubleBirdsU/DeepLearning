@@ -99,7 +99,6 @@ class FeatureConcat(Layer):
 class WeightedFeatureFusion(Layer):  # weighted sum of 2 or more layers https://arxiv.org/abs/1911.09070
     """将多个特征矩阵的值进行融合
     """
-
     def __init__(self, layers, weight=False):
         super(WeightedFeatureFusion, self).__init__()
         self.layers = layers  # layer indices
@@ -159,20 +158,19 @@ class MaxPool2D(nn.MaxPool2d):
 class MixConv2d(Layer):  # MixConv: Mixed Depthwise Convolutional Kernels https://arxiv.org/abs/1907.09595
     def __init__(self, in_ch, out_ch, kernel_size=(3, 5, 7), stride=1, dilation=1, bias=True, method='equal_params'):
         super(MixConv2d, self).__init__()
-
         groups = len(kernel_size)
         if method == 'equal_ch':  # equal channels per group
-            i = torch.linspace(0, groups - 1E-6, out_ch).floor()  # out_ch indices
-            ch = [(i == groups).sum() for groups in range(groups)]
+            ind_ch = torch.linspace(0, groups - 1E-6, out_ch).floor()  # out_ch indices
+            ch = [(ind_ch == groups).sum() for groups in range(groups)]
         else:  # 'equal_params': equal parameter count per group
-            b = [out_ch] + [0] * groups
             a = np.eye(groups + 1, groups, kernel_size=-1)
             a -= np.roll(a, 1, axis=1)
             a *= np.array(kernel_size) ** 2
             a[0] = 1
+            b = [out_ch] + [0] * groups
             ch = np.linalg.lstsq(a, b, rcond=None)[0].round().astype(int)  # solve for equal weight indices, ax = b
 
-        self.m = nn.ModuleList([
+        self.block_list = nn.ModuleList([
             nn.Conv2d(in_channels=in_ch,
                       out_channels=ch[groups],
                       kernel_size=kernel_size[groups],
@@ -182,18 +180,37 @@ class MixConv2d(Layer):  # MixConv: Mixed Depthwise Convolutional Kernels https:
                       bias=bias) for groups in range(groups)])
 
     def forward(self, x):
-        return torch.cat([m(x) for m in self.m], 1)
+        return torch.cat([block(x) for block in self.block_list], 1)
 
 
 class FeatureExtractor(Layer):
+    """FeatureExtractor
+        Conv2d, BatchNormal, Activation, Pooling
+
+    Args:
+        activation: default 'valid', 'relu', 'leaky', 'selu'. all activation has parameter 'inplace' default False;
+            leaky parameter: 'negativate_slope' default 1e-2.
+    """
     def __init__(self, in_channels, out_channels, kernel_size=1, stride=1, padding='valid', groups=1, bias=True,
                  bn=False, activation='valid', pool=False, pool_size=1, pool_stride=1, **kwargs):
         """FeatureExtractor
             Conv2d, BatchNormal, Activation, Pooling
 
+        [extended_summary]
+
         Args:
-            activation: default 'valid', 'relu', 'leaky', 'selu'. all activation has parameter 'inplace' default False;
-             leaky parameter: 'negativate_slope' default 1e-2.
+            in_channels (int32): 输入维度
+            out_channels (int32): 输出维度
+            kernel_size (int, optional): 核尺寸. Defaults to 1.
+            stride (int, optional): 步长. Defaults to 1.
+            padding (str, optional): 'same', 'valid'. Defaults to 'valid'.
+            groups (int, optional): 分组数. Defaults to 1.
+            bias (bool, optional): 偏置. Defaults to True.
+            bn (bool, optional): 批归一化操作. Defaults to False.
+            activation (str, optional): 激活函数. Defaults to 'valid'.
+            pool (bool, optional): 池化. Defaults to False.
+            pool_size (int, optional): 池化核尺寸. Defaults to 1.
+            pool_stride (int, optional): 池化步长. Defaults to 1.
         """
         super(FeatureExtractor, self).__init__()
         self.add_module('Conv2d', nn.Conv2d(
@@ -283,17 +300,17 @@ class BottleneckCSP(nn.Module):
         self.conv4 = Conv(2 * hid_ch, out_ch, 1, 1)
         self.bn = nn.BatchNorm2d(2 * hid_ch)  # applied to cat(cv2, cv3)
         self.act = Mish()
-        self.m = nn.Sequential(*[Bottleneck(hid_ch, hid_ch, shortcut, groups, expansion=1.0) for _ in range(n)])
+        self.seq = nn.Sequential(*[Bottleneck(hid_ch, hid_ch, shortcut, groups, expansion=1.0) for _ in range(n)])
 
     def forward(self, x):
-        y1 = self.conv3(self.m(self.conv1(x)))
+        y1 = self.conv3(self.seq(self.conv1(x)))
         y2 = self.conv2(x)
         return self.conv4(self.act(self.bn(torch.cat((y1, y2), dim=1))))
 
 
 class BottleneckCSP2(nn.Module):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, in_ch, out_ch, n=1, shortcut=False, groups=1, e=0.5):
+    def __init__(self, in_ch, out_ch, n=1, shortcut=False, groups=1, expansion=0.5):
         # ch_in, ch_out, number, shortcut, groups, expansion
         super(BottleneckCSP2, self).__init__()
         hid_ch = int(out_ch)  # hidden channels
@@ -302,18 +319,18 @@ class BottleneckCSP2(nn.Module):
         self.conv3 = Conv(2 * hid_ch, out_ch, 1, 1)
         self.bn = nn.BatchNorm2d(2 * hid_ch)
         self.act = Mish()
-        self.m = nn.Sequential(*[Bottleneck(hid_ch, hid_ch, shortcut, groups, expansion=1.0) for _ in range(n)])
+        self.seq = nn.Sequential(*[Bottleneck(hid_ch, hid_ch, shortcut, groups, expansion=1.0) for _ in range(n)])
 
     def forward(self, x):
         x1 = self.conv1(x)
-        y1 = self.m(x1)
+        y1 = self.seq(x1)
         y2 = self.conv2(x1)
         return self.conv3(self.act(self.bn(torch.cat((y1, y2), dim=1))))
 
 
 class VoVCSP(nn.Module):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, in_ch, out_ch, n=1, shortcut=True, groups=1, e=0.5):
+    def __init__(self, in_ch, out_ch, n=1, shortcut=True, groups=1, expansion=0.5):
         # ch_in, ch_out, number, shortcut, groups, expansion
         super(VoVCSP, self).__init__()
         hid_ch = int(out_ch)  # hidden channels
@@ -344,9 +361,9 @@ class SPP(nn.Module):
 
 class SPPCSP(nn.Module):
     # CSP SPP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, in_ch, out_ch, n=1, shortcut=False, groups=1, e=0.5, kernel_size=(5, 9, 13)):
+    def __init__(self, in_ch, out_ch, n=1, shortcut=False, groups=1, expansion=0.5, kernel_size=(5, 9, 13)):
         super(SPPCSP, self).__init__()
-        hid_ch = int(2 * out_ch * e)  # hidden channels
+        hid_ch = int(2 * out_ch * expansion)  # hidden channels
         self.conv1 = Conv(in_ch, hid_ch, 1, 1)
         self.conv2 = nn.Conv2d(in_ch, hid_ch, 1, 1, bias=False)
         self.conv3 = Conv(hid_ch, hid_ch, 3, 1)
@@ -369,10 +386,10 @@ class MP(nn.Module):
     # Spatial pyramid pooling layer used in YOLOv3-SPP
     def __init__(self, kernel_size=2):
         super(MP, self).__init__()
-        self.m = nn.MaxPool2d(kernel_size=kernel_size, stride=kernel_size)
+        self.pool = nn.MaxPool2d(kernel_size=kernel_size, stride=kernel_size)
 
     def forward(self, x):
-        return self.m(x)
+        return self.pool(x)
 
 
 class Focus(nn.Module):
@@ -404,10 +421,10 @@ class Classify(nn.Module):
 # This file contains experimental modules
 class CrossConv(nn.Module):
     # Cross Convolution Downsample
-    def __init__(self, in_ch, out_ch, kernel_size=3, stride=1, groups=1, e=1.0, shortcut=False):
+    def __init__(self, in_ch, out_ch, kernel_size=3, stride=1, groups=1, expansion=1.0, shortcut=False):
         # ch_in, ch_out, kernel, stride, groups, expansion, shortcut
         super(CrossConv, self).__init__()
-        hid_ch = int(out_ch * e)  # hidden channels
+        hid_ch = int(out_ch * expansion)  # hidden channels
         self.conv1 = Conv(in_ch, hid_ch, (1, kernel_size), (1, stride))
         self.conv2 = Conv(hid_ch, out_ch, (kernel_size, 1), (stride, 1), groups=groups)
         self.add = shortcut and in_ch == out_ch
@@ -418,33 +435,33 @@ class CrossConv(nn.Module):
 
 class CrossConvCSP(nn.Module):
     # Cross Convolution CSP
-    def __init__(self, in_ch, out_ch, n=1, shortcut=True, groups=1, e=0.5):
+    def __init__(self, in_ch, out_ch, n=1, shortcut=True, groups=1, expansion=0.5):
         # ch_in, ch_out, number, shortcut, groups, expansion
         super(CrossConvCSP, self).__init__()
-        hid_ch = int(out_ch * e)  # hidden channels
+        hid_ch = int(out_ch * expansion)  # hidden channels
         self.conv1 = Conv(in_ch, hid_ch, 1, 1)
         self.conv2 = nn.Conv2d(in_ch, hid_ch, 1, 1, bias=False)
         self.conv3 = nn.Conv2d(hid_ch, hid_ch, 1, 1, bias=False)
         self.conv4 = Conv(2 * hid_ch, out_ch, 1, 1)
         self.bn = nn.BatchNorm2d(2 * hid_ch)  # applied to cat(cv2, cv3)
         self.act = nn.LeakyReLU(0.1, inplace=True)
-        self.m = nn.Sequential(*[CrossConv(hid_ch, hid_ch, 3, 1, groups, 1.0, shortcut) for _ in range(n)])
+        self.seq = nn.Sequential(*[CrossConv(hid_ch, hid_ch, 3, 1, groups, 1.0, shortcut) for _ in range(n)])
 
     def forward(self, x):
-        y1 = self.conv3(self.m(self.conv1(x)))
+        y1 = self.conv3(self.seq(self.conv1(x)))
         y2 = self.conv2(x)
         return self.conv4(self.act(self.bn(torch.cat((y1, y2), dim=1))))
 
 
 class Sum(nn.Module):
     # Weighted sum of 2 or more layers https://arxiv.org/abs/1911.09070
-    def __init__(self, n, weight=False):
+    def __init__(self, in_ch, weight=False):
         # n: number of inputs
         super(Sum, self).__init__()
         self.weight = weight  # apply weights boolean
-        self.iter = range(n - 1)  # iter object
+        self.iter = range(in_ch - 1)  # iter object
         if weight:
-            self.w = nn.Parameter(-torch.arange(1., n) / 2, requires_grad=True)  # layer weights
+            self.w = nn.Parameter(-torch.arange(1., in_ch) / 2, requires_grad=True)  # layer weights
 
     def forward(self, x):
         y = x[0]  # no weight

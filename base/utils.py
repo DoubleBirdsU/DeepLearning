@@ -844,7 +844,8 @@ def plot_one_box(x, img, color=None, label=None, line_thickness=None):
         cv2.putText(img, label, (c1[0], c1[1] - 2), 0, tl / 3, [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
 
 
-def plot_wh_methods():  # from utils.utils import *; plot_wh_methods()
+def plot_wh_methods():
+    # from utils.utils import *; plot_wh_methods()
     # Compares the two methods for width-height anchor multiplication
     # https://github.com/ultralytics/yolov3/issues/168
     x = np.arange(-4.0, 4.0, .1)
@@ -896,18 +897,18 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
     if np.max(images[0]) <= 1:
         images *= 255
 
-    bs, _, h, w = images.shape  # batch size, _, height, width
-    bs = min(bs, max_subplots)  # limit plot images
-    ns = np.ceil(bs ** 0.5)  # number of subplots (square)
+    batch_size, _, height, width = images.shape  # batch size, _, height, width
+    batch_size = min(batch_size, max_subplots)  # limit plot images
+    num_sub = np.ceil(batch_size ** 0.5)  # number of subplots (square)
 
     # Check if we should resize
-    scale_factor = max_size / max(h, w)
+    scale_factor = max_size / max(height, width)
     if scale_factor < 1:
-        h = math.ceil(scale_factor * h)
-        w = math.ceil(scale_factor * w)
+        height = math.ceil(scale_factor * height)
+        width = math.ceil(scale_factor * width)
 
     # Empty array for output
-    mosaic = np.full((int(ns * h), int(ns * w), 3), 255, dtype=np.uint8)
+    mosaic = np.full((int(num_sub * height), int(num_sub * width), 3), 255, dtype=np.uint8)
 
     # Fix class - colour map
     prop_cycle = plt.rcParams['axes.prop_cycle']
@@ -919,14 +920,14 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
         if i == max_subplots:  # if last batch has fewer images than we expect
             break
 
-        block_x = int(w * (i // ns))
-        block_y = int(h * (i % ns))
+        block_x = int(width * (i // num_sub))
+        block_y = int(height * (i % num_sub))
 
         img = img.transpose(1, 2, 0)
         if scale_factor < 1:
-            img = cv2.resize(img, (w, h))
+            img = cv2.resize(img, (width, height))
 
-        mosaic[block_y:block_y + h, block_x:block_x + w, :] = img
+        mosaic[block_y:block_y + height, block_x:block_x + width, :] = img
         if len(targets) > 0:
             image_targets = targets[targets[:, 0] == i]
             boxes = xywh2ltrb(image_targets[:, 2:6]).T
@@ -934,9 +935,9 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
             gt = image_targets.shape[1] == 6  # ground truth if no conf column
             conf = None if gt else image_targets[:, 6]  # check for confidence presence (gt vs pred)
 
-            boxes[[0, 2]] *= w
+            boxes[[0, 2]] *= width
             boxes[[0, 2]] += block_x
-            boxes[[1, 3]] *= h
+            boxes[[1, 3]] *= height
             boxes[[1, 3]] += block_y
             for j, box in enumerate(boxes.T):
                 cls = int(classes[j])
@@ -954,10 +955,10 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
                         lineType=cv2.LINE_AA)
 
         # Image border
-        cv2.rectangle(mosaic, (block_x, block_y), (block_x + w, block_y + h), (255, 255, 255), thickness=3)
+        cv2.rectangle(mosaic, (block_x, block_y), (block_x + width, block_y + height), (255, 255, 255), thickness=3)
 
     if fname is not None:
-        mosaic = cv2.resize(mosaic, (int(ns * w * 0.5), int(ns * h * 0.5)), interpolation=cv2.INTER_AREA)
+        mosaic = cv2.resize(mosaic, (int(num_sub * width * 0.5), int(num_sub * height * 0.5)), interpolation=cv2.INTER_AREA)
         cv2.imwrite(fname, cv2.cvtColor(mosaic, cv2.COLOR_BGR2RGB))
 
     return mosaic
@@ -1031,33 +1032,35 @@ def plot_labels(labels):
     plt.savefig('labels.png', dpi=200)
 
 
-def plot_evolution_results(hyp):  # from utils.utils import *; plot_evolution_results(hyp)
+def plot_evolution_results(hyp):
+    # from utils.utils import *; plot_evolution_results(hyp)
     # Plot hyperparameter evolution results in evolve.txt
     x = np.loadtxt('evolve.txt', ndmin=2)
-    f = fitness(x)
-    # weights = (f - f.min()) ** 2  # for weighted results
+    fit_ness = fitness(x)
+    # weights = (fit_ness - fit_ness.min()) ** 2  # for weighted results
     fig = plt.figure(figsize=(12, 10), tight_layout=True)
     matplotlib.rc('font', **{'size': 8})
-    for i, (k, v) in enumerate(hyp.items()):
+    for i, (key, val) in enumerate(hyp.items()):
         y = x[:, i + 7]
         # mu = (y * weights).sum() / weights.sum()  # best weighted result
-        mu = y[f.argmax()]  # best single result
+        mu = y[fit_ness.argmax()]  # best single result
         plt.subplot(4, 5, i + 1)
-        plt.plot(mu, f.max(), 'o', markersize=10)
-        plt.plot(y, f, '.')
-        plt.title('%s = %.3g' % (k, mu), fontdict={'size': 9})  # limit to 40 characters
-        print('%15s: %.3g' % (k, mu))
+        plt.plot(mu, fit_ness.max(), 'o', markersize=10)
+        plt.plot(y, fit_ness, '.')
+        plt.title('%s = %.3g' % (key, mu), fontdict={'size': 9})  # limit to 40 characters
+        print('%15s: %.3g' % (key, mu))
     plt.savefig('evolve.png', dpi=200)
 
 
-def plot_results_overlay(start=0, stop=0):  # from utils.utils import *; plot_results_overlay()
+def plot_results_overlay(start=0, stop=0):
+    # from utils.utils import *; plot_results_overlay()
     # Plot training results files 'results*.txt', overlaying train and val losses
-    s = ['train', 'train', 'train', 'Precision', 'mAP@0.5', 'val', 'val', 'val', 'Recall', 'F1']  # legends
-    t = ['GIoU', 'Objectness', 'Classification', 'P-R', 'mAP-F1']  # titles
-    for f in sorted(glob.glob('results*.txt') + glob.glob('../../Downloads/results*.txt')):
-        results = np.loadtxt(f, usecols=[2, 3, 4, 8, 9, 12, 13, 14, 10, 11], ndmin=2).T
-        n = results.shape[1]  # number of rows
-        x = range(start, min(stop, n) if stop else n)
+    legends = ['train', 'train', 'train', 'Precision', 'mAP@0.5', 'val', 'val', 'val', 'Recall', 'F1']  # legends
+    titles = ['GIoU', 'Objectness', 'Classification', 'P-R', 'mAP-F1']  # titles
+    for fname in sorted(glob.glob('results*.txt') + glob.glob('../../Downloads/results*.txt')):
+        results = np.loadtxt(fname, usecols=[2, 3, 4, 8, 9, 12, 13, 14, 10, 11], ndmin=2).T
+        num_row = results.shape[1]  # number of rows
+        x = range(start, min(stop, num_row) if stop else num_row)
         fig, ax = plt.subplots(1, 5, figsize=(14, 3.5), tight_layout=True)
         ax = ax.ravel()
         for i in range(5):
@@ -1065,40 +1068,41 @@ def plot_results_overlay(start=0, stop=0):  # from utils.utils import *; plot_re
                 y = results[j, x]
                 if i in [0, 1, 2]:
                     y[y == 0] = np.nan  # dont show zero loss values
-                ax[i].plot(x, y, marker='.', label=s[j])
-            ax[i].set_title(t[i])
+                ax[i].plot(x, y, marker='.', label=legends[j])
+            ax[i].set_title(titles[i])
             ax[i].legend()
-            ax[i].set_ylabel(f) if i == 0 else None  # add filename
-        fig.savefig(f.replace('.txt', '.png'), dpi=200)
+            ax[i].set_ylabel(fname) if i == 0 else None  # add filename
+        fig.savefig(fname.replace('.txt', '.png'), dpi=200)
 
 
-def plot_results(start=0, stop=0, bucket='', id=()):  # from utils.utils import *; plot_results()
+def plot_results(start=0, stop=0, bucket='', ids=()):
+    # from utils.utils import *; plot_results()
     # Plot training 'results*.txt' as seen in https://github.com/ultralytics/yolov3#training
     fig, ax = plt.subplots(2, 5, figsize=(12, 6), tight_layout=True)
     ax = ax.ravel()
-    s = ['GIoU', 'Objectness', 'Classification', 'Precision', 'Recall',
-         'val GIoU', 'val Objectness', 'val Classification', 'mAP@0.5', 'F1']
+    legends = ['GIoU', 'Objectness', 'Classification', 'Precision', 'Recall',
+               'val GIoU', 'val Objectness', 'val Classification', 'mAP@0.5', 'F1']
     if bucket:
         os.system('rm -rf storage.googleapis.com')
-        files = ['https://storage.googleapis.com/%s/results%g.txt' % (bucket, x) for x in id]
+        files = ['https://storage.googleapis.com/%s/results%g.txt' % (bucket, i) for i in ids]
     else:
         files = glob.glob('results*.txt') + glob.glob('../../Downloads/results*.txt')
-    for f in sorted(files):
+    for fname in sorted(files):
         try:
-            results = np.loadtxt(f, usecols=[2, 3, 4, 8, 9, 12, 13, 14, 10, 11], ndmin=2).T
+            results = np.loadtxt(fname, usecols=[2, 3, 4, 8, 9, 12, 13, 14, 10, 11], ndmin=2).T
             num_row = results.shape[1]  # number of rows
             x = range(start, min(stop, num_row) if stop else num_row)
             for i in range(10):
                 y = results[i, x]
                 if i in [0, 1, 2, 5, 6, 7]:
-                    y[y == 0] = np.nan  # dont show zero loss values
+                    y[y == 0] = np.nan  # don't show zero loss values
                     # y /= y[0]  # normalize
-                ax[i].plot(x, y, marker='.', label=Path(f).stem, linewidth=2, markersize=8)
-                ax[i].set_title(s[i])
+                ax[i].plot(x, y, marker='.', label=Path(fname).stem, linewidth=2, markersize=8)
+                ax[i].set_title(legends[i])
                 # if i in [5, 6, 7]:  # share train and val loss y axes
                 #     ax[i].get_shared_y_axes().join(ax[i], ax[i - 5])
         except:
-            print('Warning: Plotting error for %s, skipping file' % f)
+            print('Warning: Plotting error for %s, skipping file' % fname)
 
     ax[1].legend()
     fig.savefig('results.png', dpi=200)

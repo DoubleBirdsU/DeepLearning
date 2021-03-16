@@ -5,10 +5,10 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
+from base.general import check_anchor_order, make_divisible
 from base.layers import Concat, MixConv2d, Conv, Bottleneck, SPP, DWConv, Focus, \
     BottleneckCSP, BottleneckCSP2, SPPCSP, VoVCSP, CrossConv, CrossConvCSP
-from utils.general import check_anchor_order, make_divisible
-from utils.torch_utils import time_synchronized, fuse_conv_and_bn, model_info, scale_img, initialize_weights
+from base.torch_utils import time_synchronized, fuse_conv_and_bn, model_info, scale_img, initialize_weights
 
 
 class Detect(nn.Module):

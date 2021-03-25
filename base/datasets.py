@@ -583,7 +583,7 @@ def letterbox(img: np.ndarray,
 
     # scale ratio (new / old)
     r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
-    if not scale_up:  # only scale down, do not scale up (for better test mAP) 对于大于指定输入大小的图片进行缩放,小于的不变
+    if not scale_up:  # only scale down, do not scale up (for better val mAP) 对于大于指定输入大小的图片进行缩放,小于的不变
         r = min(r, 1.0)
 
     # compute padding

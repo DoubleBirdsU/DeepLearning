@@ -55,6 +55,15 @@ def check_file(file):
         return files[0]  # return first file if multiple found
 
 
+def check_dirs(dirs_list, dir_root=''):
+    dir_path = dir_root
+    for path in dirs_list:
+        dir_path = os.path.join(dir_path, path)
+        if not os.path.exists(dir_path):
+            os.mkdir(dir_path)
+    return dir_path
+
+
 def load_classes(path):
     # Loads *.names file at 'path'
     with open(path, 'r') as f:
@@ -785,7 +794,7 @@ def apply_classifier(x, model, img, im0):
             for j, a in enumerate(d):  # per item
                 cutout = im0[i][int(a[1]):int(a[3]), int(a[0]):int(a[2])]
                 im = cv2.resize(cutout, (224, 224))  # BGR
-                # cv2.imwrite('test%i.jpg' % j, cutout)
+                # cv2.imwrite('val%i.jpg' % j, cutout)
 
                 im = im[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
                 im = np.ascontiguousarray(im, dtype=np.float32)  # uint8 to float32
@@ -979,8 +988,8 @@ def plot_lr_scheduler(optimizer, scheduler, epochs=300):
 
 
 def plot_test_txt():  # from utils.utils import *; plot_test()
-    # Plot test.txt histograms
-    x = np.loadtxt('test.txt', dtype=np.float32)
+    # Plot val.txt histograms
+    x = np.loadtxt('val.txt', dtype=np.float32)
     box = ltrb2xywh(x[:, :4])
     cx, cy = box[:, 0], box[:, 1]
 

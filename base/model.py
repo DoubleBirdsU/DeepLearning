@@ -1,4 +1,5 @@
 import os
+import time
 
 import yaml
 import torch
@@ -8,7 +9,8 @@ import torch.optim as optim
 
 from torch import nn
 from base.base_model import base_model, Module
-from base.blocks import AlexBlock, VGGPoolBlock, InceptionBlock_v1B, InceptionBlock_v3B, ResConvBlock, ResBlockB
+from base.blocks import AlexBlock, VGGPoolBlock, InceptionBlock_v1B, InceptionBlock_v3B, ResConvBlock, ResBlockB, \
+    ResBlockA
 from base.layers import MaxPool2D, Dense, FeatureExtractor, RoIDense
 from base.utils import print_cover
 
@@ -96,6 +98,7 @@ class ModelCheckpoint(object):
             suffix_best = self.get_suffix(index=index_best)
             file_best = self.filepath + suffix_best
             if param_change or not os.path.exists(file_best):
+                self.ckpt['best_save_time'] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
                 torch.save(f, file_best, self.pickle_module, self.pickle_protocol,
                            self._use_new_zipfile_serialization)
 
@@ -373,26 +376,21 @@ class NNet(Module):
             call_params['lr'] = 0.01
         if 'weight_decay' not in call_params:
             call_params['weight_decay'] = 32
-        opg_bn, opg_weight, opg_bias = [], [], []  # optimizer parameter groups
-        for layer in self.get_modules():
-            if hasattr(layer, 'bias') and isinstance(layer.bias, nn.Parameter):
-                opg_bias.append(layer.bias)  # biases
-            if isinstance(layer, nn.BatchNorm2d):
-                opg_bn.append(layer.weight)  # no decay
-            elif hasattr(layer, 'weight') and isinstance(layer.weight, nn.Parameter):
-                opg_weight.append(layer.weight)  # apply decay
 
         opt_type = opt_type.lower()
         if 'adam' == opt_type:  # adjust beta1 to momentum
             momentum = kwargs['momentum'] if 'momentum' in kwargs else 0.9
-            self.optimizer = optim.Adam(opg_bias, lr=call_params['lr'], betas=(momentum, 0.999))
-        else:
+            self.optimizer = optim.Adam(self.parameters(), lr=call_params['lr'], betas=(momentum, 0.999))
+        elif 'adamw' == opt_type:
             momentum = kwargs['momentum'] if 'momentum' in kwargs else 0.9
-            self.optimizer = optim.SGD(opg_bias, lr=call_params['lr'], momentum=momentum, nesterov=True)
+            self.optimizer = optim.AdamW(self.parameters(), lr=call_params['lr'], betas=(momentum, 0.999))
+        elif 'sgd' == opt_type:
+            momentum = kwargs['momentum'] if 'momentum' in kwargs else 0.9
+            self.optimizer = optim.SGD(self.parameters(), lr=call_params['lr'], momentum=momentum, nesterov=True)
+        else:
+            alpha = kwargs['alpha'] if 'alpha' in kwargs else 0.75
+            self.optimizer = optim.ASGD(self.parameters(), lr=call_params['lr'], alpha=alpha)
 
-        self.optimizer.add_param_group({'params': opg_weight})
-        self.optimizer.add_param_group({'params': opg_bn})
-        del opg_bn, opg_weight, opg_bias
         return self.optimizer
 
     def save(
@@ -454,19 +452,28 @@ class NNet(Module):
                                     down_size - channels_bias
         if roi_size is None:
             roi_size = output_size
+        else:
+            roi_size = torch.Tensor(roi_size).int()
         return output_size.minimum(roi_size)
 
-    def load_weights(self, file_weight, mode='weight'):
+    def load_weights(self, file_weight, mode='weight', map_location=None, pickle_module=pickle):
         """load_weights
 
         Args:
             file_weight (str):
             mode:
+            pickle_module:
+            map_location:
         """
         is_exist = os.path.exists(file_weight)
         if is_exist:
             if 'weight' == mode:
-                self.load_state_dict(torch.load(file_weight))
+                state_dict = torch.load(file_weight, map_location=map_location, pickle_module=pickle_module)
+                self.load_state_dict(state_dict)
+            elif 'model' == mode:
+                state_dict = torch.load(file_weight, map_location=map_location, pickle_module=pickle_module)
+                state_dict = state_dict.state_dict()
+                self.load_state_dict(state_dict)
         return is_exist
 
     def _make_callbacks(self, callbacks):
@@ -503,7 +510,7 @@ class NNet(Module):
 
 
 class LeNet(NNet):
-    def __init__(self, num_cls=10, img_size=(1, 28, 28), roi_size=None):
+    def __init__(self, num_cls=10, img_size=(1, 28, 28), roi_size=None, kernels_size=(5, 5, 5, 5)):
         """LeNet
 
         Input:
@@ -513,6 +520,7 @@ class LeNet(NNet):
             num_cls (int, optional): the number of classes. Defaults to 10.
             img_size:
             roi_size:
+            kernels_size:
 
         Returns:
             None
@@ -520,28 +528,34 @@ class LeNet(NNet):
         super(LeNet, self).__init__()
         roi_size = self.get_roi_size(roi_size, img_size[1:], 4, 5)
         self.addLayers([
-            FeatureExtractor(img_size[0], 6, 5),  # 1x28x28 -> 6x24x24
-            FeatureExtractor(6, 6, 5),  # 6x24x24 -> 6x20x20
-            FeatureExtractor(6, 16, 5, stride=2),  # 6x20x20 -> 16x8x8 (n + 1) // 2 - 6
-            FeatureExtractor(16, 16, 5, stride=2),  # 16x8x8 -> 16x2x2 (n + 3) // 4 - 5
-            RoIDense(16, 120, roi_size, activation='sigmoid'),
-            Dense(120, 84, 'sigmoid'),
+            FeatureExtractor(img_size[0], 6, kernels_size[0], activation='relu'),  # 1x28x28 -> 6x24x24
+            FeatureExtractor(6, 6, kernels_size[1], activation='relu'),  # 6x24x24 -> 6x20x20
+            FeatureExtractor(6, 16, kernels_size[2], stride=2, activation='relu'),  # 6x20x20 -> 16x8x8 (n + 1) // 2 - 6
+            FeatureExtractor(16, 16, kernels_size[3], stride=2, activation='relu'),  # 16x8x8 -> 16x2x2 (n + 3) // 4 - 5
+            RoIDense(16, 120, roi_size, activation='relu'),  # default: sigmoid
+            Dense(120, 84, 'relu'),  # default: sigmoid
             Dense(84, num_cls, activation='softmax'),
         ])
 
 
 class AlexNet(NNet):
-    def __init__(self, num_cls=1000, img_size=(3, 224, 224), roi_size=None):
+    def __init__(self, num_cls=1000, img_size=(3, 224, 224), roi_size=None, kernels_size=(11, 5, 3, 3, 3)):
         super(AlexNet, self).__init__()
         roi_size = self.get_roi_size(roi_size, img_size[1:], down_size=16, channels_bias=-1)
-        self.addLayers([
-            AlexBlock((img_size[0], 48), (48, 128), (11, 5), (4, 1), pool=True),
-            AlexBlock((256, 192, 192), (192, 192, 128), 3, 1),
+        self.block_list = [
+            AlexBlock((img_size[0], 48), (48, 128), kernels_size[:2], (2, 2), padding='same', pool=True),
+            AlexBlock((256, 192, 192), (192, 192, 128), kernels_size[2:], 2, padding='same'),
             MaxPool2D(3, 1, 'same'),
             RoIDense(256, 4096, roi_size, 'relu'),
             Dense(4096, 4096, 'relu'),
             Dense(4096, num_cls, activation='softmax'),
-        ])
+        ]
+        self.addLayers(self.block_list)
+
+    def forward(self, x):
+        for block in self.block_list:
+            x = block(x)
+        return x
 
 
 class VGG16(NNet):
@@ -612,9 +626,15 @@ class InceptionNet_v3B(NNet):
 class ResNet(NNet):
     in_chs = [64, 256, 512, 1024]
     out_chs = [256, 512, 1024, 2048]
-    mid_chs = [64, 128, 256, 512]
+    hid_chs = [64, 128, 256, 512]
 
-    def __init__(self, num_cls=1000, img_size=(3, 512, 512), num_res_block=5, include_top=True, roi_size=None):
+    def __init__(self,
+                 num_cls=1000,
+                 img_size=(3, 512, 512),
+                 resnet='resnet18',
+                 num_res_block=5,
+                 include_top=True,
+                 roi_size=None):
         """ResNet
             ResNet18: [2, 2, 2, 2] ResBlockA
 
@@ -637,19 +657,39 @@ class ResNet(NNet):
             None
         """
         super(ResNet, self).__init__()
+        resnet = resnet.lower()
+        if resnet == 'resnet18':
+            res_block = ResBlockA
+            num_layers = [2, 2, 2, 2]
+        elif resnet == 'resnet34':
+            res_block = ResBlockA
+            num_layers = [3, 4, 6, 3]
+        elif resnet == 'resnet50':
+            res_block = ResBlockB
+            num_layers = [3, 4, 6, 3]
+        elif resnet == 'resnet101':
+            res_block = ResBlockB
+            num_layers = [3, 4, 6, 3]
+        elif resnet == 'resnet152':
+            res_block = ResBlockB
+            num_layers = [3, 4, 6, 3]
+        else:  # 'resnet50'
+            res_block = ResBlockB
+            num_layers = [3, 4, 6, 3]
+
         self.net = list([
             FeatureExtractor(img_size[0], 64, 7, stride=2, padding='same', bn=True, activation='relu'),
             MaxPool2D(3, stride=2, padding='same'),
         ])
 
         num = num_res_block - 1
-        for in_ch, out_ch, mid_ch in zip(self.in_chs[:num], self.out_chs[:num], self.mid_chs[:num]):
-            self.net.append(ResConvBlock(in_ch, out_ch, mid_ch, 3, ResBlockB))
+        for idx, (in_ch, out_ch, hid_ch) in enumerate(zip(self.in_chs[:num], self.out_chs[:num], self.hid_chs[:num])):
+            self.net.append(ResConvBlock(in_ch, out_ch, hid_ch, num_layers[idx], res_block))
 
-        self.out_ch_last = self.out_chs[num - 2] << (num - 2)
+        self.out_ch_last = self.out_chs[num - 1]
         if include_top:
-            roi_size = self.get_roi_size(roi_size, img_size[1:], 2 >> num)
-            self.net.append(RoIDense(2028, num_cls, roi_size, 'softmax'))
+            roi_size = self.get_roi_size(roi_size, img_size[1:], 2 << num)
+            self.net.append(RoIDense(self.out_ch_last, num_cls, roi_size, 'softmax'))
         self.addLayers(self.net)
 
     def forward(self, x):

@@ -1,5 +1,6 @@
 import math
 import os
+import pickle
 import time
 from copy import deepcopy
 
@@ -7,6 +8,9 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.nn.functional as F
+
+from base.share.callbacks import ModelCheckpoint as MCP
+from base.utils import check_dirs
 
 
 def init_seeds(seed=0):
@@ -130,6 +134,47 @@ def load_classifier(name='resnet101', n=2):
     model.last_linear.weight = torch.nn.Parameter(torch.zeros(n, filters))
     model.last_linear.out_features = n
     return model
+
+
+# 断点续训
+def load_breakpoint(net, data_name='',
+                    class_name='',
+                    weights_root='./weights',
+                    save_weights_only=True,
+                    save_best_only=True,
+                    check_ckpt=False,
+                    map_location=None,
+                    pickle_module=pickle,
+                    rm_saved_net=False):
+    """
+    Args:
+        net:
+        data_name (str):
+        weights_root:
+        save_weights_only:
+        save_best_only:
+        check_ckpt:
+        map_location:
+        pickle_module:
+        rm_saved_net:
+        class_name:
+    """
+    if data_name is None:
+        data_name = 'dataset'
+
+    mode = 'weight' if save_weights_only else 'model'
+    dir_path = check_dirs([data_name, class_name, mode], dir_root=os.path.abspath(weights_root))
+
+    filename = os.path.join(dir_path, f'{data_name}_{net.__class__.__name__}_{mode}.pt')
+    ckpt = MCP.ckpt_read(dir_path, ckpt_name=f'ckpt.yaml')
+    ckpt_file_name = filename
+    if check_ckpt and not os.path.exists(ckpt_file_name) and 'filename' in ckpt:
+        ckpt_file_name = ckpt['filename']
+    ckpt_file = ckpt_file_name + (ckpt['suffix_best'] if 'suffix_best' in ckpt else '')
+    if net.load_weights(ckpt_file, mode=mode, map_location=map_location, pickle_module=pickle_module):
+        print('----------------load the weight----------------')
+
+    return MCP(filename, save_weights_only, save_best_only, pickle_module=pickle_module)
 
 
 def scale_img(img, ratio=1.0, same_shape=True):  # img(16,3,256,416), r=ratio

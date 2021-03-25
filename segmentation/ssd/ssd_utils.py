@@ -1,11 +1,8 @@
 import os
-import pickle
 import torch
-import torch.nn as nn
 
 from torch.utils import data as tud
 from base.datasets import LoadImageAndLabels
-from base.model import ModelCheckpoint as MCP
 
 
 def dataLoader(
@@ -87,59 +84,3 @@ def load_model(net, net_name=None):
     if is_exist:
         net.load(model_save_path)
     return is_exist
-
-
-# 导入参数
-def load_weights(net, file_weight, mode='weight'):
-    """load_weights
-
-    Args:
-        net (nn.Module):
-        file_weight (str):
-        mode:
-    """
-    is_exist = os.path.exists(file_weight)
-    if is_exist:
-        if 'weight' == mode:
-            net.load_state_dict(torch.load(file_weight))
-    return is_exist
-
-
-# 断点续训
-def load_breakpoint(net, data_name=None, weights_root='./weights', save_weights_only=True,
-                    save_best_only=True, check_ckpt=False, pickle_module=pickle):
-    """load_breakpoint
-
-    Args:
-        net:
-        data_name (str):
-        weights_root:
-        save_weights_only:
-        save_best_only:
-        check_ckpt:
-        pickle_module:
-
-    Returns:
-        None
-    """
-    if data_name is None:
-        data_name = 'dataset'
-
-    if not os.path.exists(weights_root):
-        os.mkdir(weights_root)
-    param_path = os.path.join(weights_root, data_name.upper())
-    if not os.path.exists(param_path):
-        os.mkdir(param_path)
-
-    mode = 'weight' if save_weights_only else 'model'
-    filename = os.path.join(param_path, f'{data_name}_{net.__class__.__name__}_{mode}.pt')
-    ckpt = MCP.ckpt_read(param_path)
-    weight_filename = filename
-    if ckpt is not None:
-        if check_ckpt and not os.path.exists(weight_filename) and 'filename' in ckpt:
-            weight_filename = ckpt['filename']
-        weight_filename += ckpt['suffix_best'] if 'suffix_best' in ckpt else '.best'
-    if load_weights(net, weight_filename, mode):
-        print('----------------load the weight----------------')
-
-    return MCP(filename, save_weights_only, save_best_only, pickle_module=pickle_module)

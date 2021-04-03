@@ -3,8 +3,8 @@ import math
 import numpy as np
 import torch.nn as nn
 
-from base.base_model import base_model, Module
-from base.share.activations import Mish
+from base.base_model import Module
+from base.share.activations import Mish, Activation
 
 
 def make_divisible(v, divisor):
@@ -27,6 +27,12 @@ def auto_padding(kernel_size=0, padding='same', padding_value=0.):
     return tuple((torch.Tensor(kernel_size).int() - 1).numpy() // 2) if 'same' in padding and padding_value == 0. else 0
 
 
+def roi2array(roi_size):
+    if not isinstance(roi_size, np.ndarray):
+        roi_size = np.array(roi_size)
+    return roi_size
+
+
 def pad(kernel_size=0, padding='same', stride=1, padding_value=0.):
     pad_layer = None
     # Padding
@@ -37,26 +43,48 @@ def pad(kernel_size=0, padding='same', stride=1, padding_value=0.):
     return pad_layer
 
 
-def Activation(activation='relu', **kwargs):
-    if isinstance(activation, nn.Module):
-        return activation
+def create_layer(in_ch, channels, layer_param):
+    layer = None
+    out_ch = in_ch
+    module_type, layer_args = layer_param
+    if 'ConvSameBnRelu2D' == module_type:
+        layer_args.insert(0, in_ch)
+        layer = ConvSameBnRelu2D(*layer_args)
+        out_ch = layer_args[1]
+    elif 'Conv2D' == module_type:
+        layer_args.insert(0, in_ch)
+        layer = Conv2D(*layer_args)
+        out_ch = layer_args[1]
+    elif 'Dense' == module_type:
+        layer_args.insert(0, in_ch)
+        layer = Dense(*layer_args)
+        out_ch = layer_args[1]
+    elif 'Flatten' == module_type:
+        layer = Flatten()
+        out_ch = out_ch.prod()
+    elif 'MaxPool2D' == module_type:
+        layer = MaxPool2D(*layer_args)
+    elif 'RoI' == module_type:
+        layer = RoI(*layer_args)
+        out_ch = in_ch * layer.out_ch_last.prod()
+    elif 'RoIDense' == module_type:
+        layer_args.insert(0, in_ch)
+        layer = RoIDense(*layer_args)
+        out_ch = layer.out_ch_last
+    elif 'RoIFlatten' == module_type:
+        layer_args.insert(0, in_ch)
+        layer = RoIFlatten(*layer_args)
+        out_ch = layer.out_ch_last
+    elif 'Shortcut' == module_type:
+        if 'conv' == layer_args[2]:
+            layer_args = layer_args[2:] + [channels, layer_args[0]]
+        elif 'equal' == layer_args[2]:
+            layer_args = layer_args[2:]
+        elif 'pool' == layer_args[2]:
+            layer_args = layer_args[2:] + [layer_args[1]]
+        layer = Shortcut(*layer_args)
 
-    activation = activation.lower()
-    if 'leaky' == activation:
-        negativate_slope = 1e-2 if 'negativate_slope' not in kwargs else kwargs['negativate_slope']
-        inplace = kwargs['inplace'] if 'inplace' in kwargs else False
-        act = nn.LeakyReLU(negativate_slope, inplace)
-    elif 'selu' == activation:
-        inplace = kwargs['inplace'] if 'inplace' in kwargs else False
-        act = nn.SELU(inplace)
-    elif 'sigmoid' == activation:
-        act = nn.Sigmoid()
-    elif 'softmax' == activation:
-        dim = kwargs['dim'] if 'dim' in kwargs else -1
-        act = nn.Softmax(dim)
-    else:
-        act = Equ()
-    return act
+    return layer, out_ch
 
 
 class Layer(Module):
@@ -84,6 +112,16 @@ class Concat(Layer):
 
     def forward(self, x):
         return torch.cat(x, self.d)
+
+
+class RoI(Layer):
+    def __init__(self, output_size):
+        super(RoI, self).__init__()
+        self.roi = nn.AdaptiveMaxPool2d(output_size)
+        self.out_ch_last = roi2array(output_size)
+
+    def forward(self, x):
+        return self.roi(x)
 
 
 class FeatureConcat(Layer):
@@ -191,7 +229,7 @@ class FeatureExtractor(Layer):
         activation: default 'valid', 'relu', 'leaky', 'selu'. all activation has parameter 'inplace' default False;
             leaky parameter: 'negativate_slope' default 1e-2.
     """
-    def __init__(self, in_channels, out_channels, kernel_size=1, stride=1, padding='valid', groups=1, bias=True,
+    def __init__(self, in_ch, out_ch, kernel_size=1, stride=1, padding='valid', groups=1, bias=True,
                  bn=False, activation='valid', pool=False, pool_size=1, pool_stride=1, **kwargs):
         """FeatureExtractor
             Conv2d, BatchNormal, Activation, Pooling
@@ -199,7 +237,7 @@ class FeatureExtractor(Layer):
         [extended_summary]
 
         Args:
-            in_channels (int32): 输入维度
+            in_ch (int32): 输入维度
             out_channels (int32): 输出维度
             kernel_size (int, optional): 核尺寸. Defaults to 1.
             stride (int, optional): 步长. Defaults to 1.
@@ -214,22 +252,49 @@ class FeatureExtractor(Layer):
         """
         super(FeatureExtractor, self).__init__()
         self.add_module('Conv2d', nn.Conv2d(
-            in_channels, out_channels, kernel_size, stride,
+            in_ch, out_ch, kernel_size, stride,
             auto_padding(kernel_size, padding), groups=groups, bias=not bn and bias))
         if bn:  # BatchNormal
-            self.add_module('bn', nn.BatchNorm2d(out_channels))
+            self.add_module('bn', nn.BatchNorm2d(out_ch))
         if 'valid' != activation:
             self.add_module('act', Activation(activation, **kwargs))  # Activation
         if pool:  # Pooling
             self.add_module('MaxPool2D', MaxPool2D(pool_size, pool_stride, padding))
+        self.out_ch_last = out_ch
         pass
 
 
+class Conv2D(Layer):
+    def __init__(self, in_ch, out_ch, kernel_size=1, stride=1, padding='valid',
+                 activation='valid', bn=False, groups=1, **kwargs):
+        super(Conv2D, self).__init__()
+        self.add_module('Conv2d', nn.Conv2d(
+            in_ch, out_ch, kernel_size, stride, auto_padding(kernel_size, padding), groups=groups, bias=not bn))
+        if bn:  # BatchNormal
+            self.add_module('bn', nn.BatchNorm2d(out_ch))
+        if 'valid' != activation:
+            self.add_module('act', Activation(activation, **kwargs))  # Activation
+        self.out_ch_last = out_ch
+
+
+class ConvSameBnRelu2D(Conv2D):
+    """ConvPBA
+        padding='same'
+        activation='relu'
+    """
+    def __init__(self, in_ch, out_ch, kernel_size=1, stride=1, padding='same', activation='relu', groups=1):
+        super(ConvSameBnRelu2D, self).__init__(in_ch, out_ch, kernel_size, stride, padding=padding,
+                                               activation=activation, bn=True, groups=groups)
+        self.out_ch_last = out_ch
+
+
 class Dense(Layer):
-    def __init__(self, in_channels, out_channels, activation=None, bias=True, **kwargs):
+    def __init__(self, in_ch, out_ch, activation='valid', bias=True, **kwargs):
         super(Dense, self).__init__()
-        self.add_module('linear', nn.Linear(in_channels, out_channels, bias))
-        self.add_module('act', Activation(activation, **kwargs))
+        self.add_module('linear', nn.Linear(in_ch, out_ch, bias))
+        if 'valid' != activation:
+            self.add_module('act', Activation(activation, **kwargs))
+        self.out_ch_last = out_ch
 
 
 class GlobalAvgPool2D(Layer):
@@ -242,19 +307,66 @@ class GlobalAvgPool2D(Layer):
 
 
 class RoIDense(Layer):
-    def __init__(self, in_ch, out_ch, roi_size, activation=None, bias=True, **kwargs):
+    def __init__(self, in_ch, out_ch, roi_size, activation='valid', bias=True, **kwargs):
         super(RoIDense, self).__init__()
         self.addLayers([
-            nn.AdaptiveMaxPool2d(roi_size),
+            RoI(roi_size),
             nn.Flatten(),
-            Dense(in_ch * roi_size.prod(), out_ch, activation, bias, **kwargs),
+            Dense(in_ch * roi2array(roi_size).prod(), out_ch, activation, bias, **kwargs),
         ])
+        self.out_ch_last = in_ch * roi2array(roi_size).prod()
+
+
+class RoIFlatten(Layer):
+    def __init__(self, in_ch, roi_size):
+        super(RoIFlatten, self).__init__()
+        self.addLayers(nn.Sequential(
+            RoI(roi_size),
+            nn.Flatten()
+        ))
+        self.out_ch_last = in_ch * roi2array(roi_size).prod()
 
 
 # -------------------------------------------------------------------------------------------------------------------- #
 def DWConv(in_ch, out_ch, kernel_size=1, stride=1, act=None):
     # Depthwise convolution
     return Conv(in_ch, out_ch, kernel_size, stride, groups=math.gcd(in_ch, out_ch), act=act)
+
+
+class Shortcut(Layer):
+    def __init__(self, residual_path='equal', activation='relu', *args, **kwargs):
+        """make_shortcut
+            Conv, MaxPool2D, Equ
+
+        Args:
+            in_ch:
+            out_ch:
+            pool_size:
+            residual_path: 'conv', 'pool', 'equal', Default 'equal'
+
+        Returns:
+            None
+        """
+        super(Shortcut, self).__init__()
+        self.residual_path = residual_path
+        if residual_path == 'conv':
+            in_ch = kwargs['in_ch'] if 'in_ch' in kwargs else args[0]
+            out_ch = kwargs['out_ch'] if 'out_ch' in kwargs else args[1]
+            self.shortcut = Conv2D(in_ch, out_ch, kernel_size=1, strides=1, padding='same')
+        elif residual_path == 'pool':
+            pool_size = kwargs['pool_size'] if 'pool_size' in kwargs else args[0]
+            self.shortcut = MaxPool2D(pool_size, stride=2, padding='same')
+        else:
+            self.shortcut = None
+
+        self.act = Activation(activation, inplace=True) if 'valid' != activation else None
+
+    def forward(self, x):
+        y_front, y_tail = x
+        if self.shortcut is not None:
+            y_front = self.shortcut(y_front)
+        y = y_front + y_tail
+        return self.act(y) if self.act is not None else y
 
 
 class Conv(nn.Module):

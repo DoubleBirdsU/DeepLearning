@@ -5,11 +5,11 @@ import torch.optim as optim
 
 from torch import nn
 from base.base_model import base_model, Module
-from base.blocks import AlexBlock, VGGPoolBlock, InceptionBlock_v1B, InceptionBlock_v3B, ResConvBlock, ResBlockB, \
-    ResBlockA
-from base.layers import MaxPool2D, Dense, FeatureExtractor, RoIDense
-from base.share.callbacks import ModelCheckpoint, DatasetCheck, make_callbacks
-from base.utils import print_cover
+from base.blocks import create_block
+from base.layers import create_layer
+from base.message import Message
+from base.share.callbacks import ModelCheckpoint, make_callbacks
+
 
 ONNX_EXPORT = False
 DEFAULT_PROTOCOL = 2
@@ -21,8 +21,11 @@ class Model(base_model):
 
 
 class NNet(Module):
-    def __init__(self):
+    def __init__(self, cfg=None, layers_fn=None, include_top=True):
         super(NNet, self).__init__()
+        self.cfg = cfg
+        self.layers_fn = layers_fn
+        self.channels = None
         self.optimizer = None
         self.loss = None
         self.device = None
@@ -31,10 +34,88 @@ class NNet(Module):
         self.checkdata_fn = None
         self.epoch = 0
         self.epochs = 0
+        self.msg = Message()
         self._callbacks = None
         self._save_weights_only = False,
         self._save_best_only = False,
         self._params_dict = dict()
+        if cfg is not None:
+            self.set_class_name(cfg['net_name'])
+            self.cfg_module_list = nn.ModuleList()
+            self.cfg_from_list = []
+            self.cfg_value_list = []
+            self.base = nn.ModuleList()
+            self.classifier = nn.ModuleList()
+            self.create_net(include_top)
+
+    def forward(self, *args, **kwargs):
+        if self.cfg is not None:
+            return self.forward_cfg(args[0])
+        else:
+            return super(NNet, self).forward(*args, **kwargs)
+
+    def forward_cfg(self, x):
+        self.cfg_value_list = [x]
+        for from_idx, module in zip(self.cfg_from_list, self.cfg_module_list):
+            self.cfg_value_list.append(module(self.cfg_value_list[from_idx] if isinstance(from_idx, int) else
+                                          [self.cfg_value_list[i] for i in from_idx]))
+        return self.cfg_value_list[-1]
+
+    def create_net(self, include_top=True):
+        self.channels = [self.cfg['img_size'][0]]
+        for param in self.cfg['backbone']:
+            idx_from, block_params = param[0], param[1:]
+            block = self.create_sequential(block_params, idx_from)
+            self.cfg_from_list.append(idx_from)
+            self.cfg_module_list.append(block)
+
+        if include_top:
+            for param in self.cfg['head']:
+                idx_from, block_params = param[0], param[1:]
+                block = self.create_sequential(block_params, idx_from)
+                self.cfg_from_list.append(idx_from)
+                self.cfg_module_list.append(block)
+        self.addLayers(self.cfg_module_list)
+
+    def create_sequential(self, block_param, idx_from=None):
+        num_layer, layer_param = block_param[0], block_param[1:]
+        if num_layer == 1:
+            sequential = self.get_module(layer_param, idx_from)
+        else:
+            sequential = nn.Sequential()
+            for i in range(num_layer):
+                layer = self.get_module(layer_param, idx_from)
+                sequential.add_module(f'{layer_param[0]}_{i}', layer)
+        return sequential
+
+    def check_args(self, layer_args):
+        for i, arg in enumerate(layer_args):
+            if isinstance(arg, str) and arg in self.cfg:
+                layer_args[i] = self.cfg[arg]
+        return layer_args
+
+    def get_module(self, layer_param, idx_from=None):
+        """
+        get_module 获取模块
+
+        生成模块
+
+        Args:
+            layer_param (List[str, List[Union[str, int]]]): 模块信息参数
+            idx_from (Union[int, List[int]]), optional): 模块输入. Defaults to None.
+
+        Returns:
+            Module: 模块
+        """
+        in_ch, out_ch = self.channels[-1], self.channels[-1]
+        layer_param[1] = self.check_args(layer_param[1])
+
+        channels = None if idx_from is None else self.channels[idx_from[0]]
+        layer, out_ch = create_layer(in_ch, channels, layer_param)
+        if layer is None:
+            layer, out_ch = create_block(layer_param, self.cfg, in_ch, self.layers_fn)
+        self.channels.append(out_ch)
+        return layer
 
     def compile(self, optimizer=None, loss=None, call_params=None, metrics=None, device=torch.device('cpu')):
         """
@@ -48,10 +129,11 @@ class NNet(Module):
         Returns:
             None
         """
-        self.optimizer = self.get_parameters(optimizer, call_params)
+        self.optimizer = self.get_optimizer(optimizer, call_params)
         self.loss = loss
         self.metrics = metrics
         self.device = device
+        self.msg.set_metrics(metrics)
 
     def fit_generator(
             self,
@@ -114,7 +196,25 @@ class NNet(Module):
                             validation_steps=validation_steps,
                             validation_batch_size=validation_batch_size)
             if epoch % validation_freq == 0 or epoch == epochs:
-                self.valid_once(validation_data, self.checkpoint_fn)
+                self.valid_once(validation_data)
+
+    def evaluate(self, imgs, dim=1):
+        """evaluate
+
+        Args:
+            imgs:
+            dim:
+
+        Returns:
+            Tensor
+        """
+        self.eval()
+        target_pred = []
+        with torch.no_grad():
+            for img in imgs:
+                y_pred = self(img.to(self.device))
+                target_pred.append(torch.argmax(y_pred, dim=dim))
+        return torch.cat(target_pred, dim=0)
 
     def evaluate_generator(self, test_loader, batch_size):
         """evaluate_generator
@@ -142,20 +242,20 @@ class NNet(Module):
                     # 输出信息
                     num_data += len(data)
                     loss_mean = (loss_mean * batch_idx + loss) / (batch_idx + 1)
-                    correct += self._get_correct(y_pred, y_true) if self.metrics else 0.
+                    correct += self.get_correct(y_pred, y_true) if self.metrics else 0.
 
-                msg = self._print_cover(loss_mean, correct, num_data, batch_idx + 1, count_batch)
-                print_cover(msg)
+                self.msg.msg_out(loss_mean, 1.0 * correct / num_data, cur_batch=batch_idx + 1, count_batch=count_batch)
         print('')
 
-    def train_once(self,
-                   train_loader,
-                   batch_size,
-                   validation_bool=None,
-                   validation_data=None,
-                   validation_steps=None,
-                   validation_batch_size=None,
-                   ):
+    def train_once(
+            self,
+            train_loader,
+            batch_size,
+            validation_bool=None,
+            validation_data=None,
+            validation_steps=None,
+            validation_batch_size=None,
+    ):
         """train_once
 
         Args:
@@ -187,21 +287,19 @@ class NNet(Module):
                 # 输出信息
                 num_data += len(data)
                 loss_mean = (loss_mean * batch_idx + loss) / (batch_idx + 1)
-                correct += self._get_correct(y_pred, y_true) if self.metrics else 0.
+                correct += self.get_correct(y_pred, y_true) if self.metrics else 0.
 
-            msg = self._print_cover(loss_mean, correct, num_data, batch_idx + 1, count_batch)
-            print_cover(msg)
+            self.msg.msg_out(loss_mean, 1.0 * correct / num_data, cur_batch=batch_idx + 1, count_batch=count_batch)
 
             # 测试
             if validation_batch_size is not None and 0 == (batch_idx + 1) % validation_batch_size:
-                self.valid_once(validation_data, self.checkpoint_fn)
+                self.valid_once(validation_data)
 
-    def valid_once(self, valid_loader, checkpoint_fn=None):
+    def valid_once(self, valid_loader):
         """valid_once
 
         Args:
             valid_loader:
-            checkpoint_fn:
 
         Returns:
             None
@@ -211,15 +309,15 @@ class NNet(Module):
         loss_mean = 0.
         with torch.no_grad():
             for data, y_true in valid_loader:
-                data, y_true = data.to(self.device), y_true.to(self.device)
-                y_pred = self(data)
+                y_true = y_true.to(self.device)
+                y_pred = self(data.to(self.device))
                 loss_mean += self.loss(y_pred, y_true)
-                correct += self._get_correct(y_pred, y_true) if self.metrics else 0.
+                correct += self.get_correct(y_pred, y_true) if self.metrics else 0.
 
         # 输出信息
         loss_mean /= len(valid_loader.dataset)
         val_acc = 1. * correct / len(valid_loader.dataset)
-        print(self._make_msg(loss_mean, val_acc, 'val_'))
+        self.msg.msg_out(loss_mean, val_acc, is_wrap=True, prefix='val_')
 
         # checkpoint
         if self.checkpoint_fn is not None:
@@ -227,29 +325,53 @@ class NNet(Module):
 
         return loss_mean, val_acc
 
-    def get_parameters(self, opt_type='adam', call_params=None, **kwargs):
-        if call_params is None:
-            call_params = {'lr': 0.01, 'weight_decay': 32}
-        if 'lr' not in call_params:
-            call_params['lr'] = 0.01
-        if 'weight_decay' not in call_params:
-            call_params['weight_decay'] = 32
+    def get_optimizer(self, optimizer='adam', call_params=None):
+        if isinstance(optimizer, optim.Optimizer):
+            return optimizer
 
-        opt_type = opt_type.lower()
-        if 'adam' == opt_type:  # adjust beta1 to momentum
-            momentum = kwargs['momentum'] if 'momentum' in kwargs else 0.9
-            self.optimizer = optim.Adam(self.parameters(), lr=call_params['lr'], betas=(momentum, 0.999))
-        elif 'adamw' == opt_type:
-            momentum = kwargs['momentum'] if 'momentum' in kwargs else 0.9
-            self.optimizer = optim.AdamW(self.parameters(), lr=call_params['lr'], betas=(momentum, 0.999))
-        elif 'sgd' == opt_type:
-            momentum = kwargs['momentum'] if 'momentum' in kwargs else 0.9
-            self.optimizer = optim.SGD(self.parameters(), lr=call_params['lr'], momentum=momentum, nesterov=True)
+        optimizer = optimizer.lower()
+        params_list = dict()
+        if 'adam' == optimizer:  # adjust beta1 to momentum
+            call_params = self.check_call_params(call_params, lr_default=1e-3)
+            params_list = self.get_parameters()
+            self.optimizer = optim.Adam(self.parameters(), **call_params)
+        elif 'adamw' == optimizer:
+            call_params = self.check_call_params(call_params, lr_default=1e-3)
+            params_list = self.get_parameters()
+            self.optimizer = optim.AdamW(self.parameters(), **call_params)
+        elif 'sgd' == optimizer:
+            call_params = self.check_call_params(call_params, lr_default=1e-2)
+            self.optimizer = optim.SGD(self.parameters(), **call_params)
         else:
-            alpha = kwargs['alpha'] if 'alpha' in kwargs else 0.75
-            self.optimizer = optim.ASGD(self.parameters(), lr=call_params['lr'], alpha=alpha)
+            call_params = self.check_call_params(call_params, lr_default=1e-2)
+            self.optimizer = optim.ASGD(self.parameters(), **call_params)
 
+        self.del_parameters(params_list)
         return self.optimizer
+
+    def get_parameters(self):
+        opg_bn, opg_weight, opg_bias = [], [], []  # optimizer parameter groups
+        for layer in self.get_modules():
+            if hasattr(layer, 'bias') and isinstance(layer.bias, nn.Parameter):
+                opg_bias.append(layer.bias)  # biases
+            if isinstance(layer, nn.BatchNorm2d):
+                opg_bn.append(layer.weight)  # no decay
+            elif hasattr(layer, 'weight') and isinstance(layer.weight, nn.Parameter):
+                opg_weight.append(layer.weight)  # apply decay
+        return [{'params': opg_bn}, {'params': opg_weight}, {'params': opg_bias}]
+
+    @staticmethod
+    def del_parameters(params_list):
+        for params in params_list:
+            del params['params']
+
+    @staticmethod
+    def check_call_params(call_params=None, lr_default=1e-2):
+        if call_params is None:
+            call_params = {'lr': lr_default}
+        elif 'lr' not in call_params:
+            call_params['lr'] = lr_default
+        return call_params
 
     def save(
             self, filepath,
@@ -334,213 +456,11 @@ class NNet(Module):
                 self.load_state_dict(state_dict)
         return is_exist
 
-    def _print_cover(self, loss, correct, count_data, cur_batch, count_batch):
-        schedule = self._get_schedule(1. * cur_batch / count_batch)
-        msg = self._make_msg(loss, 1. * correct / count_data, prefix='')
-        return f'{cur_batch}/{count_batch} {schedule}{msg}'
-
-    def _make_msg(self, loss, accuracy=.0, prefix=''):
-        msg = ' - {}loss: {:.6f}'.format(prefix, loss)
-        if self.metrics:
-            msg += ' - {}{}: {:.6f}'.format(prefix, self.metrics[0], accuracy)
-        return msg
+    def set_class_name(self, net_name):
+        if net_name is not None:
+            self.__class__.__name__ = net_name
 
     @staticmethod
-    def _get_correct(y_pred, y_true):
+    def get_correct(y_pred, y_true):
         pred = y_pred.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
         return pred.eq(y_true.view_as(pred)).sum().item()
-
-    @staticmethod
-    def _get_schedule(scale=1., count=25):
-        schedule = f'[{"-" * count}]'
-        schedule = schedule.replace('-', '=', int(scale * count))
-        return schedule.replace('-', '>', 1)
-
-
-class LeNet(NNet):
-    def __init__(self, num_cls=10, img_size=(1, 28, 28), roi_size=None, kernels_size=(5, 5, 5, 5)):
-        """LeNet
-
-        Input:
-            1 * N * N
-
-        Args:
-            num_cls (int, optional): the number of classes. Defaults to 10.
-            img_size:
-            roi_size:
-            kernels_size:
-
-        Returns:
-            None
-        """
-        super(LeNet, self).__init__()
-        roi_size = self.get_roi_size(roi_size, img_size[1:], 4, 5)
-        self.addLayers([
-            FeatureExtractor(img_size[0], 6, kernels_size[0], activation='relu'),  # 1x28x28 -> 6x24x24
-            FeatureExtractor(6, 6, kernels_size[1], activation='relu'),  # 6x24x24 -> 6x20x20
-            FeatureExtractor(6, 16, kernels_size[2], stride=2, activation='relu'),  # 6x20x20 -> 16x8x8 (n + 1) // 2 - 6
-            FeatureExtractor(16, 16, kernels_size[3], stride=2, activation='relu'),  # 16x8x8 -> 16x2x2 (n + 3) // 4 - 5
-            RoIDense(16, 120, roi_size, activation='relu'),  # default: sigmoid
-            Dense(120, 84, 'relu'),  # default: sigmoid
-            Dense(84, num_cls, activation='softmax'),
-        ])
-
-
-class AlexNet(NNet):
-    def __init__(self, num_cls=1000, img_size=(3, 224, 224), roi_size=None, kernels_size=(11, 5, 3, 3, 3)):
-        super(AlexNet, self).__init__()
-        roi_size = self.get_roi_size(roi_size, img_size[1:], down_size=16, channels_bias=-1)
-        self.block_list = [
-            AlexBlock((img_size[0], 48), (48, 128), kernels_size[:2], (2, 2), padding='same', pool=True),
-            AlexBlock((256, 192, 192), (192, 192, 128), kernels_size[2:], 2, padding='same'),
-            MaxPool2D(3, 1, 'same'),
-            RoIDense(256, 4096, roi_size, 'relu'),
-            Dense(4096, 4096, 'relu'),
-            Dense(4096, num_cls, activation='softmax'),
-        ]
-        self.addLayers(self.block_list)
-
-    def forward(self, x):
-        for block in self.block_list:
-            x = block(x)
-        return x
-
-
-class VGG16(NNet):
-    def __init__(self, num_cls=1000, img_size=(3, 224, 224), roi_size=None):
-        super(VGG16, self).__init__()
-        roi_size = self.get_roi_size(roi_size, img_size[1:])
-        self.addLayers([
-            VGGPoolBlock(img_size[0], 64, num_layer=2, pool_size=3, pool_stride=2),
-            VGGPoolBlock(64, 128, num_layer=2, pool_size=3, pool_stride=2),
-            VGGPoolBlock(128, 256, num_layer=3, pool_size=3, pool_stride=2),
-            VGGPoolBlock(256, 512, num_layer=3, pool_size=3, pool_stride=2),
-            VGGPoolBlock(512, 512, num_layer=3, pool_size=3, pool_stride=2),
-            RoIDense(512, 512, roi_size, 'relu'),
-            Dense(512, 512, 'relu'),
-            Dense(512, num_cls, activation='softmax'),
-        ])
-
-
-class InceptionNet_v1B(NNet):
-    def __init__(self, num_cls=1000, img_size=(3, 224, 224), roi_size=None):
-        super(InceptionNet_v1B, self).__init__()
-        roi_size = self.get_roi_size(roi_size, img_size[1:], 16)
-        self.net = nn.Sequential(
-            FeatureExtractor(img_size[0], 64, 3, padding='same', bn=True, activation='relu'),
-            InceptionBlock_v1B(64, 64),
-            FeatureExtractor(64, 128, 3, padding='same', bn=True, activation='relu'),
-            InceptionBlock_v1B(128, 128),
-            FeatureExtractor(128, 256, 3, padding='same', bn=True, activation='relu'),
-            FeatureExtractor(256, 256, 3, padding='same', bn=True, activation='relu'),
-            InceptionBlock_v1B(256, 256),
-            FeatureExtractor(256, 512, 3, padding='same', bn=True, activation='relu'),
-            FeatureExtractor(512, 512, 3, padding='same', bn=True, activation='relu'),
-            InceptionBlock_v1B(512, 512),
-            RoIDense(512, 512, roi_size, 'relu'),
-            Dense(512, 512, 'relu'),
-            Dense(512, num_cls, activation='softmax'),
-        )
-        self.addLayers(self.net)
-
-    def forward(self, x):
-        return self.net(x)
-
-
-class InceptionNet_v3B(NNet):
-    def __init__(self, num_cls=1000, img_size=(3, 224, 224), roi_size=None):
-        super(InceptionNet_v3B, self).__init__()
-        roi_size = self.get_roi_size(roi_size, img_size[1:], 16)
-        self.net = nn.Sequential(
-            FeatureExtractor(img_size[0], 64, 3, padding='same', bn=True, activation='relu'),
-            InceptionBlock_v3B(64, 64),
-            FeatureExtractor(64, 128, 3, padding='same', bn=True, activation='relu'),
-            InceptionBlock_v3B(128, 128),
-            FeatureExtractor(128, 256, 3, padding='same', bn=True, activation='relu'),
-            FeatureExtractor(256, 256, 3, padding='same', bn=True, activation='relu'),
-            InceptionBlock_v3B(256, 256),
-            FeatureExtractor(256, 512, 3, padding='same', bn=True, activation='relu'),
-            FeatureExtractor(512, 512, 3, padding='same', bn=True, activation='relu'),
-            InceptionBlock_v3B(512, 512),
-            RoIDense(512, 512, roi_size, 'relu'),
-            Dense(512, num_cls, activation='softmax'),
-        )
-        self.addLayers(self.net)
-
-    def forward(self, x):
-        return self.net(x)
-
-
-class ResNet(NNet):
-    in_chs = [64, 256, 512, 1024]
-    out_chs = [256, 512, 1024, 2048]
-    hid_chs = [64, 128, 256, 512]
-
-    def __init__(self,
-                 num_cls=1000,
-                 img_size=(3, 512, 512),
-                 resnet='resnet18',
-                 num_res_block=5,
-                 include_top=True,
-                 roi_size=None):
-        """ResNet
-            ResNet18: [2, 2, 2, 2] ResBlockA
-
-            ResNet34: [3, 4, 6, 3] ResBlockA
-
-            ResNet50: [3, 4, 6, 3] ResBlockB
-
-            ResNet101: [3, 4, 23, 3] ResBlockB
-
-            ResNet152: [3, 8, 36, 3] ResBlockB
-
-        Args:
-            num_cls:
-            img_size:
-            num_res_block:
-            include_top:
-            roi_size:
-
-        Returns:
-            None
-        """
-        super(ResNet, self).__init__()
-        resnet = resnet.lower()
-        if resnet == 'resnet18':
-            res_block = ResBlockA
-            num_layers = [2, 2, 2, 2]
-        elif resnet == 'resnet34':
-            res_block = ResBlockA
-            num_layers = [3, 4, 6, 3]
-        elif resnet == 'resnet50':
-            res_block = ResBlockB
-            num_layers = [3, 4, 6, 3]
-        elif resnet == 'resnet101':
-            res_block = ResBlockB
-            num_layers = [3, 4, 6, 3]
-        elif resnet == 'resnet152':
-            res_block = ResBlockB
-            num_layers = [3, 4, 6, 3]
-        else:  # 'resnet50'
-            res_block = ResBlockB
-            num_layers = [3, 4, 6, 3]
-
-        self.net = list([
-            FeatureExtractor(img_size[0], 64, 7, stride=2, padding='same', bn=True, activation='relu'),
-            MaxPool2D(3, stride=2, padding='same'),
-        ])
-
-        num = num_res_block - 1
-        for idx, (in_ch, out_ch, hid_ch) in enumerate(zip(self.in_chs[:num], self.out_chs[:num], self.hid_chs[:num])):
-            self.net.append(ResConvBlock(in_ch, out_ch, hid_ch, num_layers[idx], res_block))
-
-        self.out_ch_last = self.out_chs[num - 1]
-        if include_top:
-            roi_size = self.get_roi_size(roi_size, img_size[1:], 2 << num)
-            self.net.append(RoIDense(self.out_ch_last, num_cls, roi_size, 'softmax'))
-        self.addLayers(self.net)
-
-    def forward(self, x):
-        for block in self.net:
-            x = block(x)
-        return x

@@ -13,12 +13,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torchvision
+import yaml
 
 from tqdm import tqdm
 from copy import copy
 from pathlib import Path
 from sys import platform
-from base import torch_utils  # , google_utils
+# from base import torch_utils  # , google_utils
 from base.base_model import base_model
 
 
@@ -31,10 +32,17 @@ matplotlib.rc('font', **{'size': 11})
 cv2.setNumThreads(0)
 
 
+def load_yaml(filename):
+    yaml_dict = dict()
+    with open(filename) as f:
+        yaml_dict = yaml.safe_load(f)
+    return yaml_dict
+
+
 def init_seeds(seed=0):
     random.seed(seed)
     np.random.seed(seed)
-    torch_utils.init_seeds(seed=seed)
+    # torch_utils.init_seeds(seed=seed)
 
 
 def check_git_status():

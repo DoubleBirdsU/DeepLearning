@@ -6,8 +6,8 @@ from base.utils import xywh2ltrb, bbox_iou
 from math import sqrt
 
 from base.base_model import Module
-from base.blocks import ResConvBlock, ResBlockB
-from base.layers import FeatureExtractor
+from base.blocks import ResConvBlock, ResBlockB, ResBlockA, ConvSameBnRelu2D
+from base.layers import FeatureExtractor, Concat, RoI, Conv2D, Shortcut, MaxPool2D, Dense
 from base.model import ResNet, NNet
 
 # ********************** SSD hyper-parameters begin ********************** #
@@ -17,7 +17,58 @@ g_maps_size = (38, 19, 10, 5, 3, 1)  # 特征图的尺寸
 g_steps = (8, 16, 32, 64, 100, 300)  # 每层特征图中一个cell在原图中的跨度(尺寸)
 g_ratios = (1, 2, 3)
 g_scales = (21, 45, 99, 153, 207, 261, 315)  # 预测图像在原图中的基础跨度(尺寸或比例)
+
+
 # *********************** SSD hyper-parameters end *********************** #
+
+
+def get_module(layer_param, cfg, channels=None):
+    module_type, layer_args = layer_param
+    if module_type not in ['Concat', 'Dense', 'FeatureExtractor', 'ResConvBlock', 'RoI', 'SSDClassifier',
+                           'SSDBlock']:
+        return None, channels
+
+    layer = None
+    if 'ResConvBlock' == module_type:
+        res_dict = {
+            'ResBlockA': ResBlockA,
+            'ResBlockB': ResBlockB,
+        }
+
+        layer_args.insert(0, channels[-1])
+        if layer_args[4] in res_dict.keys():
+            layer_args[4] = res_dict[layer_args[4]]
+        layer = ResConvBlock(*layer_args)
+        channels.append(layer_args[1])
+    elif 'SSDBlock' == module_type:
+        layer_args.insert(0, channels[-1])
+        if len(layer_args) > 4:
+            if isinstance(layer_args[4], int):
+                layer_args[4] = tuple([layer_args, layer_args])
+            elif isinstance(layer_args[4], list) and len(layer_args[4]) == 1:
+                layer_args[4] = tuple(layer_args[4] + layer_args[4])
+            elif isinstance(layer_args[4], list) and len(layer_args[4]) == 2:
+                layer_args[4] = tuple(layer_args[4])
+        layer = SSDBlock(*layer_args)
+        channels.append(layer_args[1])
+    elif 'SSDClassifier' == module_type:
+        if isinstance(layer_args[1], str):
+            layer_args[1] = cfg[layer_args[1]]
+        layer = SSDClassifier(*layer_args)
+    return layer, channels
+
+
+def create_net(cfg):
+    net = nn.ModuleList()
+    idx_from_list = []
+    channels = [cfg['img_size'][0]]
+    net_list = cfg['backbone'] + cfg['head']
+    # for block_param in net_list:
+    #     block, channels = create_block(block_param[1:], cfg, channels, block_param[0])
+    #     idx_from_list.append(block_param[0])
+    #     net.append(block)
+
+    return net, idx_from_list
 
 
 class SSDClassifier(NNet):
@@ -33,11 +84,27 @@ class SSDClassifier(NNet):
 
 
 class SSDBlock(NNet):
-    def __init__(self, in_ch, out_ch, mid_ch, out_stride, num_cls, num_anchor=4, kernel_sizes=(1, 3), padding='same'):
+    def __init__(self, in_ch, out_ch, hid_ch, out_stride, kernel_sizes=(1, 3), padding='same'):
         super(SSDBlock, self).__init__()
+        self.blocks = [
+            FeatureExtractor(in_ch, hid_ch, kernel_sizes[0], padding=padding, bn=True, activation='relu'),
+            FeatureExtractor(hid_ch, out_ch, kernel_sizes[1], out_stride, padding=padding, bn=True, activation='relu')
+        ]
+        self.addLayers(self.blocks)
+        pass
+
+    def forward(self, x):
+        for block in self.blocks:
+            x = block(x)
+        return x
+
+
+class SSD_Block(NNet):
+    def __init__(self, in_ch, out_ch, hid_ch, out_stride, num_cls, num_anchor=4, kernel_sizes=(1, 3), padding='same'):
+        super(SSD_Block, self).__init__()
         self.num_cls = num_cls
-        self.feb0 = FeatureExtractor(in_ch, mid_ch, kernel_sizes[0], padding=padding, bn=True, activation='relu')
-        self.feb1 = FeatureExtractor(mid_ch, out_ch, kernel_sizes[1], out_stride, padding=padding, bn=True,
+        self.feb0 = FeatureExtractor(in_ch, hid_ch, kernel_sizes[0], padding=padding, bn=True, activation='relu')
+        self.feb1 = FeatureExtractor(hid_ch, out_ch, kernel_sizes[1], out_stride, padding=padding, bn=True,
                                      activation='relu')
         self.classifier = SSDClassifier(out_ch, num_cls, num_anchor)
         self.addLayers([self.feb0, self.feb1, self.classifier])
@@ -53,11 +120,12 @@ class BackBone(NNet):
     """BackBone
         引入 RoIPooling
     """
+
     def __init__(self, num_cls=21, img_size=(3, 300, 300), num_anchor=4):
         super(BackBone, self).__init__()
-        self.resnet = ResNet(num_cls, img_size, num_res_block=4, include_top=False)
+        self.resnet = ResNet(num_cls, img_size, resnet='resnet50', num_res_block=4, include_top=False)
         self.roi = nn.AdaptiveMaxPool2d((38, 38))
-        in_ch, out_ch, mid_ch = self.resnet.in_chs[-1], self.resnet.out_chs[-1], self.resnet.mid_chs[-1]
+        in_ch, out_ch, mid_ch = self.resnet.in_chs[-1], self.resnet.out_chs[-1], self.resnet.hid_chs[-1]
         self.classifier = SSDClassifier(self.resnet.out_ch_last, num_cls, num_anchor)
         self.res_conv5 = ResConvBlock(in_ch, out_ch, mid_ch, 3, ResBlockB)
 
@@ -85,11 +153,11 @@ class SSD(NNet):
         super(SSD, self).__init__()
         self.ssd_blk_list = [
             BackBone(num_cls, img_size, num_anchor=g_num_cls_anchors[0]),
-            SSDBlock(2048, 1024, 1024, 1, num_cls, num_anchor=g_num_cls_anchors[1], kernel_sizes=(3, 1)),
-            SSDBlock(1024, 512, 256, 2, num_cls, num_anchor=g_num_cls_anchors[2]),
-            SSDBlock(512, 256, 128, 2, num_cls, num_anchor=g_num_cls_anchors[3]),
-            SSDBlock(256, 256, 128, 2, num_cls, num_anchor=g_num_cls_anchors[4]),
-            SSDBlock(256, 256, 128, 2, num_cls, num_anchor=g_num_cls_anchors[5], padding='valid'),
+            SSD_Block(2048, 1024, 1024, 1, num_cls, num_anchor=g_num_cls_anchors[1], kernel_sizes=(3, 1)),
+            SSD_Block(1024, 512, 256, 2, num_cls, num_anchor=g_num_cls_anchors[2]),
+            SSD_Block(512, 256, 128, 2, num_cls, num_anchor=g_num_cls_anchors[3]),
+            SSD_Block(256, 256, 128, 2, num_cls, num_anchor=g_num_cls_anchors[4]),
+            SSD_Block(256, 256, 128, 2, num_cls, num_anchor=g_num_cls_anchors[5], padding='valid'),
         ]
         self.addLayers(self.ssd_blk_list)
 
@@ -232,7 +300,7 @@ class SSDLoss(Module):
             feature_map = feature_map.view(4, -1).numpy()
             feature_map[:2] /= map_size
             for idx in range(num_anchor):
-                feature_map[-2:] = box_wh[:, idx:idx+1]
+                feature_map[-2:] = box_wh[:, idx:idx + 1]
                 box.append(feature_map.copy())
 
             xywh_boxes.append(np.concatenate(box, axis=-1))

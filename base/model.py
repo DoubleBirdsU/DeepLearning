@@ -45,7 +45,7 @@ class NNet(Module):
         self._save_best_only = False,
         self._params_dict = dict()
         if cfg is not None:
-            if cls_name is not None:
+            if cls_name is None:
                 self.set_class_name(cfg['net_name'])
             self.cfg_module_list = nn.ModuleList()
             self.cfg_from_list = []

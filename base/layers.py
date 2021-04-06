@@ -43,50 +43,6 @@ def pad(kernel_size=0, padding='same', stride=1, padding_value=0.):
     return pad_layer
 
 
-def create_layer(in_ch, channels, layer_param):
-    layer = None
-    out_ch = in_ch
-    module_type, layer_args = layer_param
-    if 'ConvSameBnRelu2D' == module_type:
-        layer_args.insert(0, in_ch)
-        layer = ConvSameBnRelu2D(*layer_args)
-        out_ch = layer_args[1]
-    elif 'Conv2D' == module_type:
-        layer_args.insert(0, in_ch)
-        layer = Conv2D(*layer_args)
-        out_ch = layer_args[1]
-    elif 'Dense' == module_type:
-        layer_args.insert(0, in_ch)
-        layer = Dense(*layer_args)
-        out_ch = layer_args[1]
-    elif 'Flatten' == module_type:
-        layer = Flatten()
-        out_ch = out_ch.prod()
-    elif 'MaxPool2D' == module_type:
-        layer = MaxPool2D(*layer_args)
-    elif 'RoI' == module_type:
-        layer = RoI(*layer_args)
-        out_ch = in_ch * layer.out_ch_last.prod()
-    elif 'RoIDense' == module_type:
-        layer_args.insert(0, in_ch)
-        layer = RoIDense(*layer_args)
-        out_ch = layer.out_ch_last
-    elif 'RoIFlatten' == module_type:
-        layer_args.insert(0, in_ch)
-        layer = RoIFlatten(*layer_args)
-        out_ch = layer.out_ch_last
-    elif 'Shortcut' == module_type:
-        if 'conv' == layer_args[2]:
-            layer_args = layer_args[2:] + [channels, layer_args[0]]
-        elif 'equal' == layer_args[2]:
-            layer_args = layer_args[2:]
-        elif 'pool' == layer_args[2]:
-            layer_args = layer_args[2:] + [layer_args[1]]
-        layer = Shortcut(*layer_args)
-
-    return layer, out_ch
-
-
 class Layer(Module):
     def __init__(self):
         super(Layer, self).__init__()

@@ -11,61 +11,6 @@ def trans_tuple(parm, num_param=2):
     return parm
 
 
-def create_block(layer_param, cfg, in_ch=None, layers_fn=None):
-    module_type, layer_args = layer_param
-    out_ch = layer_args[0] if isinstance(layer_args[0], int) else in_ch
-    layer_args.insert(0, in_ch)
-    if 'AlexBlock' == module_type:
-        layer = AlexBlock(*layer_args)
-    elif 'VGGPoolBlock' == module_type:
-        layer = VGGPoolBlock(*layer_args)
-    elif 'ConcatBlock' == module_type:
-        layer_args.pop(0)
-        layer = ConcatBlock(*layer_args)
-        # TODO out_ch = layer_args[1]
-    elif 'InceptionBlock_v1A' == module_type:
-        layer = InceptionBlock_v1A(*layer_args)
-    elif 'InceptionBlock_v1B' == module_type:
-        layer = InceptionBlock_v1B(*layer_args)
-    elif 'InceptionBlock_v3A' == module_type:
-        layer = InceptionBlock_v3A(*layer_args)
-    elif 'InceptionBlock_v3B' == module_type:
-        layer = InceptionBlock_v3B(*layer_args)
-    elif 'ReductionBlock_v4B' == module_type:
-        layer = ReductionBlock_v4B(*layer_args)
-    elif 'IncResBlock_v4A' == module_type:
-        layer = IncResBlock_v4A(*layer_args)
-    elif 'IncResBlock_v4B' == module_type:
-        layer = IncResBlock_v4B(*layer_args)
-    elif 'ResConvBlock' == module_type:
-        res_dict = {
-            'ResBlockA': ResBlockA,
-            'ResBlockB': ResBlockB,
-        }
-
-        if layer_args[4] in res_dict.keys():
-            layer_args[4] = res_dict[layer_args[4]]
-        layer = ResConvBlock(*layer_args)
-        out_ch = layer_args[1]
-    elif 'ResBlockA' == module_type:
-        layer = ResBlockA(*layer_args)
-    elif 'ResBlockB' == module_type:
-        layer = ResBlockB(*layer_args)
-    elif 'FeatureExtractor' == module_type:
-        if len(layer_args) > 7 and not isinstance(layer_args[7], bool):
-            layer_args.insert(7, False)
-        if len(layer_args) > 8 and not isinstance(layer_args[8], str):
-            layer_args.insert(8, 'valid')
-        if len(layer_args) > 9 and not isinstance(layer_args[9], bool):
-            layer_args.insert(9, True)
-        layer = FeatureExtractor(*layer_args)
-    elif layers_fn is not None:
-        layer, out_ch = layers_fn(layer_param, cfg, in_ch)
-    else:
-        raise KeyError(f'{module_type} is not block\'s key.')
-    return layer, out_ch
-
-
 class ModuleBlock(Module):
     def __init__(self):
         super(ModuleBlock, self).__init__()

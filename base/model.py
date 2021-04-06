@@ -5,26 +5,31 @@ import torch.optim as optim
 
 from torch import nn
 from base.base_model import base_model, Module
-from base.blocks import create_block
-from base.layers import create_layer
 from base.message import Message
 from base.share.callbacks import ModelCheckpoint, make_callbacks
-
+from base.share.net_parser import NetParser
 
 ONNX_EXPORT = False
 DEFAULT_PROTOCOL = 2
 
 
 class Model(base_model):
-    def __init__(self):
+    def __init__(self, cls_name=None):
         super(Model, self).__init__()
+        self.set_class_name(cls_name)
+
+    def set_class_name(self, cls_name):
+        if cls_name is not None:
+            self.__class__.__name__ = cls_name
 
 
 class NNet(Module):
-    def __init__(self, cfg=None, layers_fn=None, include_top=True):
-        super(NNet, self).__init__()
+    def __init__(self, cfg=None, layers_fn=None, include_top=True, cls_name=None):
+        super(NNet, self).__init__(cls_name=cls_name)
         self.cfg = cfg
         self.layers_fn = layers_fn
+        self.include_top = include_top
+        self.cls_name = cls_name
         self.channels = None
         self.optimizer = None
         self.loss = None
@@ -40,13 +45,15 @@ class NNet(Module):
         self._save_best_only = False,
         self._params_dict = dict()
         if cfg is not None:
-            self.set_class_name(cfg['net_name'])
+            if cls_name is not None:
+                self.set_class_name(cfg['net_name'])
             self.cfg_module_list = nn.ModuleList()
             self.cfg_from_list = []
             self.cfg_value_list = []
             self.base = nn.ModuleList()
             self.classifier = nn.ModuleList()
-            self.create_net(include_top)
+            self.parser = NetParser(self, self.cfg)
+            self.parser.create_net(include_top)
 
     def forward(self, *args, **kwargs):
         if self.cfg is not None:
@@ -60,62 +67,6 @@ class NNet(Module):
             self.cfg_value_list.append(module(self.cfg_value_list[from_idx] if isinstance(from_idx, int) else
                                           [self.cfg_value_list[i] for i in from_idx]))
         return self.cfg_value_list[-1]
-
-    def create_net(self, include_top=True):
-        self.channels = [self.cfg['img_size'][0]]
-        for param in self.cfg['backbone']:
-            idx_from, block_params = param[0], param[1:]
-            block = self.create_sequential(block_params, idx_from)
-            self.cfg_from_list.append(idx_from)
-            self.cfg_module_list.append(block)
-
-        if include_top:
-            for param in self.cfg['head']:
-                idx_from, block_params = param[0], param[1:]
-                block = self.create_sequential(block_params, idx_from)
-                self.cfg_from_list.append(idx_from)
-                self.cfg_module_list.append(block)
-        self.addLayers(self.cfg_module_list)
-
-    def create_sequential(self, block_param, idx_from=None):
-        num_layer, layer_param = block_param[0], block_param[1:]
-        if num_layer == 1:
-            sequential = self.get_module(layer_param, idx_from)
-        else:
-            sequential = nn.Sequential()
-            for i in range(num_layer):
-                layer = self.get_module(layer_param, idx_from)
-                sequential.add_module(f'{layer_param[0]}_{i}', layer)
-        return sequential
-
-    def check_args(self, layer_args):
-        for i, arg in enumerate(layer_args):
-            if isinstance(arg, str) and arg in self.cfg:
-                layer_args[i] = self.cfg[arg]
-        return layer_args
-
-    def get_module(self, layer_param, idx_from=None):
-        """
-        get_module 获取模块
-
-        生成模块
-
-        Args:
-            layer_param (List[str, List[Union[str, int]]]): 模块信息参数
-            idx_from (Union[int, List[int]]), optional): 模块输入. Defaults to None.
-
-        Returns:
-            Module: 模块
-        """
-        in_ch, out_ch = self.channels[-1], self.channels[-1]
-        layer_param[1] = self.check_args(layer_param[1])
-
-        channels = None if idx_from is None else self.channels[idx_from[0]]
-        layer, out_ch = create_layer(in_ch, channels, layer_param)
-        if layer is None:
-            layer, out_ch = create_block(layer_param, self.cfg, in_ch, self.layers_fn)
-        self.channels.append(out_ch)
-        return layer
 
     def compile(self, optimizer=None, loss=None, call_params=None, metrics=None, device=torch.device('cpu')):
         """
@@ -455,10 +406,6 @@ class NNet(Module):
                 state_dict = state_dict.state_dict()
                 self.load_state_dict(state_dict)
         return is_exist
-
-    def set_class_name(self, net_name):
-        if net_name is not None:
-            self.__class__.__name__ = net_name
 
     @staticmethod
     def get_correct(y_pred, y_true):

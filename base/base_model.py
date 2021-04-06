@@ -10,8 +10,9 @@ class base_model(nn.Module):
 
 
 class Module(base_model):
-    def __init__(self):
+    def __init__(self, cls_name=None):
         super(Module, self).__init__()
+        self.set_class_name(cls_name)
         self.in_ch_first = None
         self.out_ch_last = None
         self.modules_list = nn.ModuleList()
@@ -48,6 +49,10 @@ class Module(base_model):
         """
         self._init_in_ch_first(layers, bool_in)
         self._collect_layers(layers, bool_out)
+
+    def set_class_name(self, cls_name):
+        if cls_name is not None:
+            self.__class__.__name__ = cls_name
 
     def _collect_layers(self, modules, bool_out=False):
         if modules is None:

@@ -12,116 +12,134 @@ class NetParser:
 
     def create_net(self, include_top=True):
         self.net.channels = [self.cfg['img_size'][0]]
-        for param in self.cfg['backbone']:
-            idx_from, block_params = param[0], param[1:]
-            block = self.create_sequential(block_params, idx_from)
+        for params in self.cfg['backbone']:
+            idx_from, sequential_params = params[0], params[1:]
+            block = self.create_sequential(sequential_params, idx_from)
             self.net.cfg_from_list.append(idx_from)
             self.net.cfg_module_list.append(block)
 
         if include_top:
-            for param in self.cfg['head']:
-                idx_from, block_params = param[0], param[1:]
-                block = self.create_sequential(block_params, idx_from)
+            for params in self.cfg['head']:
+                idx_from, sequential_params = params[0], params[1:]
+                block = self.create_sequential(sequential_params, idx_from)
                 self.net.cfg_from_list.append(idx_from)
                 self.net.cfg_module_list.append(block)
         self.net.addLayers(self.net.cfg_module_list)
 
-    def create_sequential(self, block_param, idx_from=None):
-        num_layer, layer_param = block_param[0], block_param[1:]
+    def create_sequential(self, sequential_params, idx_from=None):
+        num_layer, module_params = sequential_params[0], sequential_params[1:]
         if num_layer == 1:
-            sequential = self.get_module(layer_param, idx_from)
+            sequential = self.get_module(module_params, idx_from)
         else:
             sequential = nn.Sequential()
             for i in range(num_layer):
-                layer = self.get_module(layer_param, idx_from)
-                sequential.add_module(f'{layer_param[0]}_{i}', layer)
+                layer = self.get_module(module_params, idx_from)
+                sequential.add_module(f'{module_params[0]}_{i}', layer)
         return sequential
 
-    def get_module(self, layer_param, idx_from=None):
+    def get_module(self, module_params, idx_from=None):
         """
         get_module 获取模块
 
         生成模块
 
         Args:
-            layer_param (List[str, List[Union[str, int]]]): 模块信息参数
+            module_params (List[str, List[Union[str, int]]]): 模块信息参数
             idx_from (Union[int, List[int]]), optional): 模块输入. Defaults to None.
 
         Returns:
             Module: 模块
         """
         in_ch, out_ch = self.net.channels[-1], self.net.channels[-1]
-        layer_param = layer_param[:1] + self.check_args(layer_param[1:])
+        module_params = module_params[:1] + self.check_params(module_params[1:])
 
-        channels = None if idx_from is None else self.net.channels[idx_from]
-        layer, out_ch = self.create_layer(in_ch, channels, layer_param)
-        if layer is None:
-            layer, out_ch = self.create_block(layer_param, self.cfg, in_ch, self.net.layers_fn)
+        if module_params[0] in layers.layer_name_set:
+            layer, out_ch = self.create_layer(module_params, in_ch, self.net.channels, idx_from)
+        elif module_params[0] in blocks.block_name_set:
+            layer, out_ch = self.create_block(module_params, in_ch, self.net.channels, idx_from)
+        elif self.net.layers_fn is not None:
+            layer, out_ch = self.net.layers_fn(module_params, in_ch, self.net.channels, idx_from)
+        else:
+            raise KeyError(f'{module_params[0]} is not block\'s key.')
         self.net.channels.append(out_ch)
         return layer
 
-    def check_args(self, layer_params):
-        layer_args, layer_kwargs = [], {}
-        for param in layer_params:
+    def check_params(self, params):
+        arg_list, kwarg_dict = list(), dict()
+        for param in params:
             if isinstance(param, list):
-                layer_args = param
+                arg_list = param
             elif isinstance(param, dict):
-                layer_kwargs = param
+                kwarg_dict = param
+        return [self.check_args(arg_list), self.check_kwargs(kwarg_dict)]
 
-        for i, arg in enumerate(layer_args):
+    def check_args(self, arg_list):
+        for i, arg in enumerate(arg_list):
             if isinstance(arg, str) and arg in self.cfg:
-                layer_args[i] = self.cfg[arg]
+                arg_list[i] = self.cfg[arg]
+            elif isinstance(arg, list):
+                arg_list[i] = self.check_args(arg)
+        return arg_list
 
-        for key, value in layer_kwargs.items():
+    def check_kwargs(self, kwarg_dict):
+        for key, value in kwarg_dict.items():
             if isinstance(value, str) and value in self.cfg:
-                layer_kwargs[key] = self.cfg[value]
-        return [layer_args, layer_kwargs]
+                kwarg_dict[key] = self.cfg[value]
+        return kwarg_dict
 
-    @staticmethod
-    def create_layer(in_ch, channels, layer_param):
-        layer = None
-        out_ch = in_ch
+    def create_layer(self, layer_param, in_ch, channels, idx_from=None):
         module_type, args, kwargs = layer_param
+        args.insert(0, in_ch)
+        out_ch = kwargs['out_ch'] if 'out_ch' in kwargs else args[1]
         if 'ConvSameBnRelu2D' == module_type:
-            args.insert(0, in_ch)
             layer = layers.ConvSameBnRelu2D(*args, **kwargs)
-            out_ch = args[1]
         elif 'Conv2D' == module_type:
-            args.insert(0, in_ch)
             layer = layers.Conv2D(*args, **kwargs)
-            out_ch = args[1]
         elif 'Dense' == module_type:
-            args.insert(0, in_ch)
             layer = layers.Dense(*args, **kwargs)
-            out_ch = args[1]
         elif 'Flatten' == module_type:
             layer = layers.Flatten()
-            out_ch = out_ch.prod()
-        elif 'MaxPool2D' == module_type:
-            layer = layers.MaxPool2D(*args, **kwargs)
-        elif 'RoI' == module_type:
-            layer = layers.RoI(*args, **kwargs)
-            out_ch = in_ch * layer.out_ch_last.prod()
+            out_ch = in_ch.prod()
         elif 'RoIDense' == module_type:
-            args.insert(0, in_ch)
             layer = layers.RoIDense(*args, **kwargs)
             out_ch = layer.out_ch_last
         elif 'RoIFlatten' == module_type:
-            args.insert(0, in_ch)
             layer = layers.RoIFlatten(*args, **kwargs)
             out_ch = layer.out_ch_last
-        elif 'Shortcut' == module_type:
-            if 'conv' == args[0]:
-                kwargs['in_ch'] = channels
-            layer = layers.Shortcut(*args, **kwargs)
-
+        else:
+            layer, out_ch = self.create_no_in_layer(layer_param, in_ch, channels, idx_from)
         return layer, out_ch
 
     @staticmethod
-    def create_block(layer_param, cfg, in_ch=None, layers_fn=None):
+    def create_no_in_layer(layer_param, in_ch, channels, idx_from=None):
+        layer = None
         module_type, args, kwargs = layer_param
-        args.insert(0, in_ch)
+        out_ch = kwargs['out_ch'] if 'out_ch' in kwargs else args[1]
+        if 'Concat' == module_type:
+            layer = layers.Concat(*args, **kwargs)
+            out_ch = 0
+            for idx in idx_from:
+                out_ch += channels[idx]
+        elif 'MaxPool2D' == module_type:
+            layer = layers.MaxPool2D(*args, **kwargs)
+        elif 'UpSample' == module_type:
+            layer = layers.UpSample(*args, **kwargs)
+        elif 'RoI' == module_type:
+            layer = layers.RoI(*args, **kwargs)
+            out_ch = in_ch * layer.out_ch_last.prod()
+        elif 'Shortcut' == module_type:
+            if 'conv' == args[0]:
+                kwargs['in_ch'] = channels[idx_from]
+            layer = layers.Shortcut(*args, **kwargs)
+        return layer, out_ch
+
+    @staticmethod
+    def create_block(block_param, in_ch, channels=None, idx_from=None):
+        module_type, args, kwargs = block_param
         out_ch = args[0] if isinstance(args[0], int) else in_ch
+        args.insert(0, in_ch)
+
+        layer = None
         if 'AlexBlock' == module_type:
             layer = blocks.AlexBlock(*args, **kwargs)
         elif 'VGGPoolBlock' == module_type:
@@ -159,15 +177,5 @@ class NetParser:
         elif 'ResBlockB' == module_type:
             layer = blocks.ResBlockB(*args, **kwargs)
         elif 'FeatureExtractor' == module_type:
-            if len(args) > 7 and not isinstance(args[7], bool):
-                args.insert(7, False)
-            if len(args) > 8 and not isinstance(args[8], str):
-                args.insert(8, 'valid')
-            if len(args) > 9 and not isinstance(args[9], bool):
-                args.insert(9, True)
             layer = blocks.FeatureExtractor(*args, **kwargs)
-        elif layers_fn is not None:
-            layer, out_ch = layers_fn(layer_param, cfg, in_ch)
-        else:
-            raise KeyError(f'{module_type} is not block\'s key.')
         return layer, out_ch

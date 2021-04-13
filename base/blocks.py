@@ -441,3 +441,21 @@ class ResBlockB(ResBlock):
         for layer in self.res_list:
             x = layer(x)
         return self.act(x + y)
+
+
+block_name_set = {
+    'AlexBlock',
+    'VGGPoolBlock',
+    'ConcatBlock',
+    'InceptionBlock_v1A',
+    'InceptionBlock_v1B',
+    'InceptionBlock_v3A',
+    'InceptionBlock_v3B',
+    'ReductionBlock_v4B',
+    'IncResBlock_v4A',
+    'IncResBlock_v4B',
+    'ResConvBlock',
+    'ResBlockA',
+    'ResBlockB',
+    'FeatureExtractor',
+}

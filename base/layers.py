@@ -62,12 +62,12 @@ class Flatten(Layer):
 
 class Concat(Layer):
     # Concatenate a list of tensors along dimension
-    def __init__(self, dimension=1):
+    def __init__(self, dim=1):
         super(Concat, self).__init__()
-        self.d = dimension
+        self.dim = dim
 
     def forward(self, x):
-        return torch.cat(x, self.d)
+        return torch.cat(x, self.dim)
 
 
 class RoI(Layer):
@@ -325,6 +325,11 @@ class Shortcut(Layer):
         return self.act(y) if self.act is not None else y
 
 
+class UpSample(nn.Upsample):
+    def __init__(self, size=None, stride=None, mode='nearest', align_corners=None):
+        super(UpSample, self).__init__(size=size, scale_factor=stride, mode=mode, align_corners=align_corners)
+
+
 class Conv(nn.Module):
     # Standard convolution
     def __init__(self, in_ch, out_ch, kernel_size=1, stride=1, padding='same', groups=1, act=True):
@@ -571,3 +576,18 @@ class GhostBottleneck(nn.Module):
 
     def forward(self, x):
         return self.conv(x) + self.shortcut(x)
+
+
+layer_name_set = {
+    'ConvSameBnRelu2D',
+    'Conv2D',
+    'Dense',
+    'Flatten',
+    'RoIDense',
+    'RoIFlatten',
+    'Concat',
+    'MaxPool2D',
+    'UpSample',
+    'RoI',
+    'Shortcut',
+}

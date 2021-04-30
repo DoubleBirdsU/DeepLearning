@@ -18,3 +18,123 @@ degrees: 0.  # image rotation (+/- deg)
 translate: 0.  # image translation (+/- fraction)
 scale: 0.  # image scale (+/- gain)
 shear: 0.  # image shear (+/- deg)
+
+net_name: SSD_SPP
+num_cls: 21
+img_size: [3, 300, 300]
+
+
+backbone:  # ResNet50: [3, 4, 6, 3] ResBlockB
+  # from, number, module, args
+  [
+    [-1, 1, ConvSameBnRelu2D, [64, 7, 2]],
+    [-1, 1, MaxPool2D, [3, 2, 'same']],
+
+    # 3
+    [-1, 1, ConvSameBnRelu2D, [64, 1, 1]],
+    [-1, 1, ConvSameBnRelu2D, [64, 3, 2]],
+    [-1, 1, ConvSameBnRelu2D, [256, 1, 1, 'same', 'valid']],
+    [[-4, -1], 1, Shortcut, [256, 3, 'conv', 'relu']],
+
+    [-1, 1, ConvSameBnRelu2D, [256, 1, 1]],
+    [-1, 1, ConvSameBnRelu2D, [64, 3, 2]],
+    [-1, 1, ConvSameBnRelu2D, [256, 1, 1, 'same', 'valid']],
+    [[-4, -1], 1, Shortcut, [256, 1, 'equal', 'relu']],
+
+    [-1, 1, ConvSameBnRelu2D, [256, 1, 1]],
+    [-1, 1, ConvSameBnRelu2D, [64, 3, 2]],
+    [-1, 1, ConvSameBnRelu2D, [256, 1, 1, 'same', 'valid']],
+    [[-4, -1], 1, Shortcut, [256, 1, 'pool', 'relu']],
+
+    # 4
+    [-1, 1, ConvSameBnRelu2D, [256, 1, 1]],
+    [-1, 1, ConvSameBnRelu2D, [128, 3, 1]],
+    [-1, 1, ConvSameBnRelu2D, [256, 1, 1, 'same', 'valid']],
+    [[-4, -1], 1, Shortcut, [256, 1, 'conv', 'relu']],
+
+    [-1, 1, ConvSameBnRelu2D, [256, 1, 1]],
+    [-1, 1, ConvSameBnRelu2D, [128, 3, 1]],
+    [-1, 1, ConvSameBnRelu2D, [256, 1, 1, 'same', 'valid']],
+    [[-4, -1], 1, Shortcut, [256, 1, 'equal', 'relu']],
+
+    [-1, 1, ConvSameBnRelu2D, [256, 1, 1]],
+    [-1, 1, ConvSameBnRelu2D, [128, 3, 1]],
+    [-1, 1, ConvSameBnRelu2D, [256, 1, 1, 'same', 'valid']],
+    [[-4, -1], 1, Shortcut, [256, 1, 'equal', 'relu']],
+
+    [-1, 1, ConvSameBnRelu2D, [256, 1, 1]],
+    [-1, 1, ConvSameBnRelu2D, [128, 3, 2]],
+    [-1, 1, ConvSameBnRelu2D, [512, 1, 1, 'same', 'valid']],
+    [[-4, -1], 1, Shortcut, [512, 1, 'pool', 'relu']],
+
+    # 6
+    [-1, 1, ConvSameBnRelu2D, [512, 1, 1]],
+    [-1, 1, ConvSameBnRelu2D, [256, 3, 1]],
+    [-1, 1, ConvSameBnRelu2D, [512, 1, 1, 'same', 'valid']],
+    [[-4, -1], 1, Shortcut, [512, 1, 'conv', 'relu']],
+
+    [-1, 1, ConvSameBnRelu2D, [512, 1, 1]],
+    [-1, 1, ConvSameBnRelu2D, [256, 3, 1]],
+    [-1, 1, ConvSameBnRelu2D, [512, 1, 1, 'same', 'valid']],
+    [[-4, -1], 1, Shortcut, [512, 1, 'equal', 'relu']],
+
+    [-1, 1, ConvSameBnRelu2D, [512, 1, 1]],
+    [-1, 1, ConvSameBnRelu2D, [256, 3, 1]],
+    [-1, 1, ConvSameBnRelu2D, [512, 1, 1, 'same', 'valid']],
+    [[-4, -1], 1, Shortcut, [512, 1, 'equal', 'relu']],
+
+    [-1, 1, ConvSameBnRelu2D, [512, 1, 1]],
+    [-1, 1, ConvSameBnRelu2D, [256, 3, 1]],
+    [-1, 1, ConvSameBnRelu2D, [512, 1, 1, 'same', 'valid']],
+    [[-4, -1], 1, Shortcut, [512, 1, 'equal', 'relu']],
+
+    [-1, 1, ConvSameBnRelu2D, [512, 1, 1]],
+    [-1, 1, ConvSameBnRelu2D, [256, 3, 1]],
+    [-1, 1, ConvSameBnRelu2D, [512, 1, 1, 'same', 'valid']],
+    [[-4, -1], 1, Shortcut, [512, 1, 'equal', 'relu']],
+
+    [-1, 1, ConvSameBnRelu2D, [512, 1, 1]],
+    [-1, 1, ConvSameBnRelu2D, [256, 3, 2]],
+    [-1, 1, ConvSameBnRelu2D, [1024, 1, 1, 'same', 'valid']],
+    [[-4, -1], 1, Shortcut, [1024, 1, 'pool', 'relu']],
+
+    [-1, 1, RoI, [38, 38]],
+
+    # 3
+    [-1, 1, ConvSameBnRelu2D, [1024, 1, 1]],
+    [-1, 1, ConvSameBnRelu2D, [512, 3, 1]],
+    [-1, 1, ConvSameBnRelu2D, [1024, 1, 1, 'same', 'valid']],
+    [[-4, -1], 1, Shortcut, [1024, 1, 'conv', 'relu']],
+
+    [-1, 1, ConvSameBnRelu2D, [1024, 1, 1]],
+    [-1, 1, ConvSameBnRelu2D, [512, 3, 1]],
+    [-1, 1, ConvSameBnRelu2D, [1024, 1, 1, 'same', 'valid']],
+    [[-4, -1], 1, Shortcut, [1024, 1, 'equal', 'relu']],
+
+    [-1, 1, ConvSameBnRelu2D, [1024, 1, 1]],
+    [-1, 1, ConvSameBnRelu2D, [512, 3, 2]],
+    [-1, 1, ConvSameBnRelu2D, [2048, 1, 1, 'same', 'valid']],
+    [[-4, -1], 1, Shortcut, [2048, 1, 'pool', 'relu']],
+  ]
+
+head:
+  [
+    [-13, 1, SSDClassifier, [1024, num_cls, 4]],
+
+    [-2, 1, SSDBlock, [1024, 1024, 1, [3, 1]]],
+    [-1, 1, SSDClassifier, [1024, num_cls, 6]],
+
+    [-2, 1, SSDBlock, [512, 256, 2]],
+    [-1, 1, SSDClassifier, [512, num_cls, 6]],
+
+    [-2, 1, SSDBlock, [256, 128, 2]],
+    [-1, 1, SSDClassifier, [256, num_cls, 6]],
+
+    [-2, 1, SSDBlock, [256, 128, 2]],
+    [-1, 1, SSDClassifier, [256, num_cls, 4]],
+
+    [-2, 1, SSDBlock, [256, 128, 2]],
+    [-1, 1, SSDClassifier, [256, num_cls, 4]],
+
+    [[-11, -9, -7, -5, -3, -1], 1, Concat, 2]
+  ]

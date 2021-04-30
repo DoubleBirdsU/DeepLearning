@@ -317,8 +317,8 @@ class Shortcut(Layer):
 
         self.act = Activation(activation, inplace=True) if 'valid' != activation else None
 
-    def forward(self, x):
-        y_front, y_tail = x
+    def forward(self, *args):
+        y_front, y_tail = args[0], args[1]
         if self.shortcut is not None:
             y_front = self.shortcut(y_front)
         y = y_front + y_tail

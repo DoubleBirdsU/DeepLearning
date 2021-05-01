@@ -1,3 +1,4 @@
+import numpy as np
 from torch import nn
 
 import base.blocks as blocks
@@ -50,10 +51,19 @@ class NetParser:
         Returns:
             Module: 模块
         """
-        in_ch, out_ch = self.net.channels[-1], self.net.channels[-1]
+        if idx_from is None:
+            in_ch, out_ch = self.net.channels[-1], self.net.channels[-1]
+        elif isinstance(idx_from, int):
+            in_ch, out_ch = self.net.channels[idx_from], self.net.channels[idx_from]
+        elif isinstance(idx_from, list) or isinstance(idx_from, list):
+            in_ch = [self.net.channels[i] for i in idx_from]
+            out_ch = in_ch
         module_params = module_params[:1] + self.check_params(module_params[1:])
 
-        if module_params[0] in layers.layer_name_set:
+        hybrid = ['List', 'Tuple']
+        if module_params[0] in hybrid:
+            layer = layers.TupleListLayer()
+        elif module_params[0] in layers.layer_name_set:
             layer, out_ch = self.create_layer(module_params, in_ch, self.net.channels, idx_from)
         elif module_params[0] in blocks.block_name_set:
             layer, out_ch = self.create_block(module_params, in_ch, self.net.channels, idx_from)
@@ -90,7 +100,11 @@ class NetParser:
     def create_layer(self, layer_param, in_ch, channels, idx_from=None):
         module_type, args, kwargs = layer_param
         args.insert(0, in_ch)
-        out_ch = kwargs['out_ch'] if 'out_ch' in kwargs else args[1]
+        try:
+            out_ch = kwargs['out_ch'] if 'out_ch' in kwargs else args[1]
+        except IndexError:
+            out_ch = in_ch
+
         if 'ConvSameBnRelu2D' == module_type:
             layer = layers.ConvSameBnRelu2D(*args, **kwargs)
         elif 'Conv2D' == module_type:
@@ -99,11 +113,12 @@ class NetParser:
             layer = layers.Dense(*args, **kwargs)
         elif 'Flatten' == module_type:
             layer = layers.Flatten()
-            out_ch = in_ch.prod()
+            out_ch = in_ch * np.array(kwargs['roi_size']).prod()
         elif 'RoIDense' == module_type:
             layer = layers.RoIDense(*args, **kwargs)
             out_ch = layer.out_ch_last
         elif 'RoIFlatten' == module_type:
+            args = args[:1]
             layer = layers.RoIFlatten(*args, **kwargs)
             out_ch = layer.out_ch_last
         else:

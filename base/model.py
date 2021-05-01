@@ -228,7 +228,8 @@ class NNet(Module):
         count_data = len(train_loader.dataset)
         count_batch = (count_data + batch_size - 1) // batch_size
         for batch_idx, (data, y_true) in enumerate(train_loader):
-            data, y_true = data.to(self.device), y_true.to(self.device)
+            data = data.to(self.device)
+            y_true = self.target_to(y_true, device=self.device)
             if data.shape[0] > 1:
                 self.optimizer.zero_grad()
                 y_pred = self(data)
@@ -261,7 +262,7 @@ class NNet(Module):
         loss_mean = 0.
         with torch.no_grad():
             for data, y_true in valid_loader:
-                y_true = y_true.to(self.device)
+                y_true = self.target_to(y_true, device=self.device)
                 y_pred = self(data.to(self.device))
                 loss_mean += self.loss(y_pred, y_true)
                 correct += self.get_correct(y_pred, y_true) if self.metrics else 0.
@@ -409,6 +410,18 @@ class NNet(Module):
         return is_exist
 
     @staticmethod
+    def target_to(y_true, device=torch.device('cpu')):
+        if isinstance(y_true, torch.Tensor):
+            y_true = y_true.to(device)
+        elif isinstance(y_true, list):
+            for i in range(len(y_true)):
+                y_true[i] = y_true[i].to(device)
+        return y_true
+
+    @staticmethod
     def get_correct(y_pred, y_true):
-        pred = y_pred.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
-        return pred.eq(y_true.view_as(pred)).sum().item()
+        # get the index of the max log-probability
+        prob_pred = y_pred if isinstance(y_pred, torch.Tensor) else y_pred[0]
+        targets_true = y_true if isinstance(y_true, torch.Tensor) else y_true[0]
+        targets_pred = prob_pred.argmax(dim=1, keepdim=True)  
+        return targets_pred.eq(targets_true.view_as(targets_pred)).sum().item()

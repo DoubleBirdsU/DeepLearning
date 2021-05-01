@@ -1,6 +1,6 @@
-import copy
 import os
 import random
+import torch
 
 import cv2
 import numpy as np
@@ -22,7 +22,7 @@ def create_state(chess_manual, value=255):
 
 
 def create_player(idx):
-    return ManualDataLoader.BlackChess if idx % 2 == 0 else ManualDataLoader.WhiteCHess
+    return ManualSectionCreator.BlackChess if idx % 2 == 0 else ManualSectionCreator.WhiteCHess
 
 
 def rot90board(chess_manual, axis=0, board_size=(15, 15)):
@@ -54,24 +54,21 @@ class DataLoader:
                  batch_size=128,
                  num_workers=4,
                  shuffle=True):
-
+        batch_size = batch_size // 4
         transform_list = []
         keys = ['train', 'val']
         dataset_name = os.path.basename(data_root)
-        transform_list.append(transforms.ToTensor())
+        transform_list.extend([
+            transforms.ToTensor()
+        ])
         data_transforms = {
             'train': transforms.Compose(transform_list),
             'val': transforms.Compose(transform_list)
         }
 
-        target_transform = dict()
-        for i in range(225):
-            target_transform[f'w_{i}'] = (i, 1.0)
-            target_transform[f'f_{i}'] = (i, -1.0)
-
         image_datasets = {
             key: ds.ImageFolder(os.path.join(data_root, key), data_transforms[key],
-                                target_transform=target_transform) for key in keys
+                                loader=self.loader_fn) for key in keys
         }
 
         for key in image_datasets:
@@ -79,25 +76,50 @@ class DataLoader:
 
         self.data_loaders = {
             key: udata.DataLoader(image_datasets[key], batch_size=batch_size,
-                                  num_workers=num_workers, shuffle=shuffle) for key in keys
+                                  shuffle=shuffle, num_workers=num_workers) for key in keys
         }
 
         self.data_size = {x: len(image_datasets[x]) for x in keys}
+        pass
 
     def __getitem__(self, item):
         return self.data_loaders[item]
 
+    @staticmethod
+    def target_fn(targets):
+        device = targets.device
+        winners_z = torch.ones_like(targets, dtype=torch.float)
+        targets = targets - 225
+        winners_z[targets < 0] = -1.0
+        winners_z[targets > 0] = 1.0
+        winners_z.unsqueeze_(-1)
+        targets = torch.abs_(targets) - 1
+        winners_z = torch.cat([winners_z for _ in range(4)], dim=0)
+        targets = torch.cat([targets for _ in range(4)], dim=0)
+        return [targets.to(device=device), winners_z.to(device=device)]
 
-class ManualDataLoader:
-    """ManualDataLoader
+    @staticmethod
+    def data_fn(data):
+        data_list = [data[:, :, :15, :15], data[:, :, :15, 15:],
+                     data[:, :, 15:, 15:], data[:, :, 15:, :15]]
+        return torch.cat(data_list, dim=0)
 
-        棋谱数据导入器
+    @staticmethod
+    def loader_fn(x):
+        return cv2.imread(x, cv2.IMREAD_UNCHANGED)
+
+
+class ManualSectionCreator:
+    """ManualSectionCreator
+
+        棋谱切片生成器
     """
     NoChess = 0
     BlackChess = 1
     WhiteCHess = -1
 
     def __init__(self, data_root,
+                 obj_root,
                  batch_size=128,
                  board_size=(15, 15),
                  nlc_min=5,
@@ -108,6 +130,7 @@ class ManualDataLoader:
                  manual_step_max=None,
                  shuffle=True):
         self.data_root = data_root
+        self.obj_root = obj_root
         self.batch_size = batch_size
         self.batch_section_size = batch_size
         self.board_size = board_size
@@ -131,6 +154,11 @@ class ManualDataLoader:
 
         self.load_chess_manuals(self.file_list)
         self.count_chess_manual = len(self.chess_manuals)
+        self.imgs_dict = dict()
+        for i in range(225):
+            idx = f'000{i}'[-3:]
+            self.imgs_dict[f'w_{idx}'] = list()
+            self.imgs_dict[f'f_{idx}'] = list()
         pass
 
     def __iter__(self):
@@ -163,40 +191,53 @@ class ManualDataLoader:
             count_data += len(chess_manual)
             self.idx_current_manual += 1
             winner = self.WhiteCHess if len(chess_manual) % 2 == 0 else self.BlackChess
-            manuals = self.revert_manual_data(chess_manual, winner)
+            manuals = self.revert_manual_step(chess_manual, winner)
             manual_list += manuals
         return manual_list
         # return random.sample(self.data_buffer, self.batch_size)
 
-    def revert_manual_data(self, chess_manual, winner):
+    def revert_manual_step(self, chess_manual, winner):
         manuals = list()
         last_move = -1
-        len_manual = len(chess_manual)
         for i, step in enumerate(chess_manual):
             player_idx = self.BlackChess if i % 2 == 0 else self.WhiteCHess
             move = self.node2flatten(step, False)
-            if len_manual > 50 and i < len_manual * 3 // 5:  #
-                winner_z = 1.0
-            else:
-                winner_z = 1.0 if winner == player_idx else -1.0
             loc_state = self.get_board(player_idx, last_move, is_copy=True)
+            winner_z = 1.0 if winner == player_idx else -1.0
+            self.filter_save_state(i, loc_state, winner_z, move, chess_manual)
             manuals.append([loc_state, [move, winner_z]])
-            self.save_state(loc_state, winner_z, move, last_move)
             self.update_board(move, player_idx)
             last_move = move
             pass
         self.init_boards()
         return list()
 
-    def save_state(self, state, winner_z, move, last_move):
-        move_x, move_y = move // self.board_size[0], move % self.board_size[0]
-        last_x, last_y = last_move // self.board_size[0], last_move % self.board_size[0]
-        move_rel = [move_x - last_x + self.board_size[0], move_y - last_y + self.board_size[1]]
-        cls_dir_prefix = 'w' if winner_z == 1.0 else 'f'
-        filename = f'section_{self.idx_current_manual}_{move}_{move_rel[0]}_{move_rel[1]}_{winner_z + 1}.png'
-        fp = os.path.join(self.data_root, 'imgs', f'{cls_dir_prefix}_{move_rel[0]}_{move_rel[1]}', filename)
-        img = np.transpose(np.array(state, dtype=np.uint8), axes=[1, 2, 0])
-        cv2.imwrite(fp, img)
+    def filter_save_state(self, idx, loc_state, winner_z, move, manual):
+        len_manual = len(manual)
+        if (len_manual > 50 and not (len_manual // 2 < idx < len_manual - 6) or
+                (len_manual < 15 and idx > len_manual - 3) or
+                (15 <= len_manual <= 50 and idx > len_manual - 5)):
+            self.save_state(loc_state, winner_z, move)
+        pass
+
+    def save_state(self, state, winner_z, move):
+        if winner_z == 1.0:
+            cls_dir_prefix = 'w'
+        else:
+            cls_dir_prefix = 'f'
+            move = 224 - move
+        idx_move = f'000{move}'[-3:]
+        key = f'{cls_dir_prefix}_{idx_move}'
+        filename = f'section_{self.idx_current_manual}_{idx_move}_{winner_z + 1}.png'
+        fp = os.path.join(self.obj_root, key, filename)
+        img = np.transpose(np.array(state, dtype=np.uint8), axes=[1, 2, 0]) * 255
+        self.imgs_dict[key].append(img)
+        if len(self.imgs_dict[key]) == 4:
+            imgs_list = self.imgs_dict[key]
+            imgs = np.concatenate([np.concatenate([imgs_list[i * 2 + j] for j in range(2)], axis=1) for i in range(2)],
+                                  axis=0)
+            cv2.imwrite(fp, imgs)
+            self.imgs_dict[key] = list()
         pass
 
     def update_board(self, move, player_idx):

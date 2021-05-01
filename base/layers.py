@@ -238,9 +238,9 @@ class ConvSameBnRelu2D(Conv2D):
         padding='same'
         activation='relu'
     """
-    def __init__(self, in_ch, out_ch, kernel_size=1, stride=1, padding='same', activation='relu', groups=1):
+    def __init__(self, in_ch, out_ch, kernel_size=1, stride=1, padding='same', activation='relu', bn=True, groups=1):
         super(ConvSameBnRelu2D, self).__init__(in_ch, out_ch, kernel_size, stride, padding=padding,
-                                               activation=activation, bn=True, groups=groups)
+                                               activation=activation, bn=bn, groups=groups)
         self.out_ch_last = out_ch
 
 
@@ -251,6 +251,16 @@ class Dense(Layer):
         if 'valid' != activation:
             self.add_module('act', Activation(activation, **kwargs))
         self.out_ch_last = out_ch
+
+
+class TupleListLayer(Layer):
+    def __init__(self):
+        super(TupleListLayer, self).__init__()
+        pass
+
+    @staticmethod
+    def forward(x):
+        return list(x)
 
 
 class GlobalAvgPool2D(Layer):
@@ -590,4 +600,5 @@ layer_name_set = {
     'UpSample',
     'RoI',
     'Shortcut',
+    'TupleListLayer',
 }

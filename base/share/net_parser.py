@@ -129,8 +129,9 @@ class NetParser:
     def create_no_in_layer(layer_param, in_ch, channels, idx_from=None):
         layer = None
         module_type, args, kwargs = layer_param
-        out_ch = kwargs['out_ch'] if 'out_ch' in kwargs else args[1]
+        out_ch = kwargs['out_ch'] if 'out_ch' in kwargs else channels[-1]
         if 'Concat' == module_type:
+            args.pop(0)
             layer = layers.Concat(*args, **kwargs)
             out_ch = 0
             for idx in idx_from:
@@ -139,6 +140,7 @@ class NetParser:
             layer = layers.MaxPool2D(*args, **kwargs)
         elif 'UpSample' == module_type:
             layer = layers.UpSample(*args, **kwargs)
+            out_ch = args[1]
         elif 'RoI' == module_type:
             layer = layers.RoI(*args, **kwargs)
             out_ch = in_ch * layer.out_ch_last.prod()

@@ -124,7 +124,7 @@ class InceptionBlock_v1B(ConcatBlock):
 
             pool-s2: MaxPooling-s2 -> Conv1
 
-            call: concat([c1-s2(x), c3-s2(x), c5-s2(x), p-s2(x)], -3)
+            call: concat([c1-s2(x), c3-s2(x), c5-s2(x), prob-s2(x)], -3)
 
         Args:
             in_ch:
@@ -163,7 +163,7 @@ class InceptionBlock_v3A(ConcatBlock):
 
             pool-s2: MaxPooling-s2 -> Conv1
 
-            call: concat([c1-s2(x), c3-s2(x), c5-s2(x), p-s2(x)], -3)
+            call: concat([c1-s2(x), c3-s2(x), c5-s2(x), prob-s2(x)], -3)
 
         Args:
             in_ch:
@@ -203,7 +203,7 @@ class InceptionBlock_v3B(ConcatBlock):
 
             pool-s2: MaxPooling-s2 -> Conv1
 
-            call: concat([c1-s2(x), c3-s2(x), c5-s2(x), p-s2(x)], -3)
+            call: concat([c1-s2(x), c3-s2(x), c5-s2(x), prob-s2(x)], -3)
 
         Args:
             in_ch:
@@ -247,7 +247,7 @@ class ReductionBlock_v4B(ConcatBlock):
 
             pool-s2: MaxPooling-s2 -> Conv1
 
-            call: concat([c1-s2(x), c3-s2(x), c5-s2(x), p-s2(x)], -3)
+            call: concat([c1-s2(x), c3-s2(x), c5-s2(x), prob-s2(x)], -3)
 
         Args:
             in_ch:
@@ -286,7 +286,7 @@ class IncResBlock_v4A(ConcatBlock):
 
             pool-s2: MaxPooling-s2 -> Conv1
 
-            call: concat([c1-s2(x), c3-s2(x), c5-s2(x), p-s2(x)], -3)
+            call: concat([c1-s2(x), c3-s2(x), c5-s2(x), prob-s2(x)], -3)
 
         Args:
             in_ch:
@@ -314,7 +314,7 @@ class IncResBlock_v4A(ConcatBlock):
 
 
 class IncResBlock_v4B(ConcatBlock):
-    def __init__(self, in_ch, out_ch, kernel_n=3):
+    def __init__(self, in_ch, out_ch, kernel_n=3, stride=2):
         """IncResBlock_v4B
             c1-s2, c3-s2, c5-s2, pool-s2
 
@@ -326,7 +326,7 @@ class IncResBlock_v4B(ConcatBlock):
 
             pool-s2: MaxPooling-s2 -> Conv1
 
-            call: concat([c1-s2(x), c3-s2(x), c5-s2(x), p-s2(x)], -3)
+            call: concat([c1-s2(x), c3-s2(x), c5-s2(x), prob-s2(x)], -3)
 
         Args:
             in_ch:
@@ -339,19 +339,19 @@ class IncResBlock_v4B(ConcatBlock):
         super(IncResBlock_v4B, self).__init__(out_ch)
         self.inc_list = [
             nn.Sequential(
-                ConvSameBnRelu2D(in_ch, self.out_ch, kernel_size=1, stride=2)),
+                ConvSameBnRelu2D(in_ch, self.out_ch, kernel_size=1, stride=stride)),
             nn.Sequential(
                 ConvSameBnRelu2D(in_ch, self.out_ch, 1),
-                ConvSameBnRelu2D(self.out_ch, self.out_ch, kernel_size=(1, kernel_n), stride=(2, 1)),
-                ConvSameBnRelu2D(self.out_ch, self.out_ch, kernel_size=(kernel_n, 1), stride=(1, 2))),
+                ConvSameBnRelu2D(self.out_ch, self.out_ch, kernel_size=(1, kernel_n), stride=(stride, 1)),
+                ConvSameBnRelu2D(self.out_ch, self.out_ch, kernel_size=(kernel_n, 1), stride=(1, stride))),
             nn.Sequential(
                 ConvSameBnRelu2D(in_ch, self.out_ch, 1),
                 ConvSameBnRelu2D(self.out_ch, self.out_ch, kernel_size=(1, kernel_n)),
                 ConvSameBnRelu2D(self.out_ch, self.out_ch, kernel_size=(kernel_n, 1)),
-                ConvSameBnRelu2D(self.out_ch, self.out_ch, kernel_size=(1, kernel_n), stride=(2, 1)),
-                ConvSameBnRelu2D(self.out_ch, self.out_ch, kernel_size=(kernel_n, 1), stride=(1, 2))),
+                ConvSameBnRelu2D(self.out_ch, self.out_ch, kernel_size=(1, kernel_n), stride=(stride, 1)),
+                ConvSameBnRelu2D(self.out_ch, self.out_ch, kernel_size=(kernel_n, 1), stride=(1, stride))),
             nn.Sequential(
-                MaxPool2D(3, stride=2, padding='same'),
+                MaxPool2D(3, stride=stride, padding='same'),
                 ConvSameBnRelu2D(in_ch, self.out_ch, 1))
         ]
         self.addLayers(self.inc_list)

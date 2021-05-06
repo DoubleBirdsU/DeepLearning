@@ -95,7 +95,7 @@ class ModelCheckpoint(object):
         if param_change:
             suffix_best = suffix_last
             self.accuracy_best = acc_cur
-            self.loss_best = float(loss.to(torch.device('cpu')).numpy()) if isinstance(loss, torch.Tensor) else loss
+            self.loss_best = float(loss.cpu().detach().numpy()) if isinstance(loss, torch.Tensor) else loss
 
         # Save best
         if self.save_best_only:

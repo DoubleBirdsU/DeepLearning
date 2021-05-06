@@ -8,7 +8,7 @@ from math import sqrt
 from base.base_model import Module
 from base.blocks import ResConvBlock, ResBlockB, ResBlockA, ConvSameBnRelu2D
 from base.layers import FeatureExtractor, Concat, RoI, Conv2D, Shortcut, MaxPool2D, Dense
-from base.model import ResNet, NNet
+from base.model import NNet
 
 # ********************** SSD hyper-parameters begin ********************** #
 g_img_size = (3, 300, 300)  # 输入图像尺寸

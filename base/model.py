@@ -37,6 +37,8 @@ class NNet(Module):
         self.metrics = None
         self.checkpoint_fn = None
         self.checkdata_fn = None
+        self.targets_fn = None
+        self.data_fn = None
         self.epoch = 0
         self.epochs = 0
         self.msg = Message()
@@ -69,7 +71,7 @@ class NNet(Module):
                        [self.cfg_value_list[i] for i in from_idx]))
         return self.cfg_value_list[-1]
 
-    def compile(self, optimizer=None, loss=None, call_params=None, metrics=None, device=torch.device('cpu')):
+    def compile(self, optimizer=None, loss=None, call_params=None, metrics=None, callbacks=None, device=torch.device('cpu'), **kwargs):
         """
         Args:
             optimizer:
@@ -77,6 +79,7 @@ class NNet(Module):
             call_params:
             device:
             metrics:
+            callbacks:
 
         Returns:
             None
@@ -85,7 +88,13 @@ class NNet(Module):
         self.loss = loss
         self.metrics = metrics
         self.device = device
+        self._callbacks = callbacks
         self.msg.set_metrics(metrics)
+        self.targets_fn = kwargs['targets_fn'] if 'targets_fn' in kwargs else None
+        self.data_fn = kwargs['data_fn'] if 'data_fn' in kwargs else None
+
+        make_callbacks(self, callbacks)
+        pass
 
     def fit_generator(
             self,
@@ -142,13 +151,14 @@ class NNet(Module):
         for epoch in range(1, epochs + 1):
             print(f'Epoch {epoch}/{epochs}:')
             self.epoch = epoch
-            self.train_once(train_data,
-                            batch_size,
-                            validation_data=validation_data,
-                            validation_steps=validation_steps,
-                            validation_batch_size=validation_batch_size)
+            loss, accuracy, count_batch = self.train_once(
+                train_data, batch_size, validation_data=validation_data,
+                validation_steps=validation_steps, validation_batch_size=validation_batch_size)
+
             if epoch % validation_freq == 0 or epoch == epochs:
-                self.valid_once(validation_data)
+                msg_prefix = self.msg.make_cover(loss, accuracy=accuracy, cur_batch=count_batch,
+                                                 count_batch=count_batch)
+                self.valid_once(validation_data, msg_prefix=msg_prefix)
 
     def evaluate(self, imgs, dim=1):
         """evaluate
@@ -194,9 +204,10 @@ class NNet(Module):
                     # 输出信息
                     num_data += len(data)
                     loss_mean = (loss_mean * batch_idx + loss) / (batch_idx + 1)
-                    correct += self.get_correct(y_pred, y_true) if self.metrics else 0.
+                    correct += self.get_correct(y_pred, y_true, self.metrics)
 
-                self.msg.msg_out(loss_mean, 1.0 * correct / num_data, cur_batch=batch_idx + 1, count_batch=count_batch)
+                self.msg.msg_out(loss_mean, 1.0 * correct / num_data, is_append=True,
+                                 cur_batch=batch_idx + 1, count_batch=count_batch)
         print('')
 
     def train_once(
@@ -226,10 +237,10 @@ class NNet(Module):
         num_data = 0
         loss_mean = 0.0
         count_data = len(train_loader.dataset)
-        count_batch = (count_data + batch_size - 1) // batch_size
+        count_batch = (count_data + train_loader.batch_size - 1) // train_loader.batch_size
         for batch_idx, (data, y_true) in enumerate(train_loader):
-            data = data.to(self.device)
-            y_true = self.target_to(y_true, device=self.device)
+            y_true = self.target_to(y_true, data.shape, device=self.device)
+            data = self.data_to(data, device=self.device)
             if data.shape[0] > 1:
                 self.optimizer.zero_grad()
                 y_pred = self(data)
@@ -239,37 +250,69 @@ class NNet(Module):
 
                 # 输出信息
                 num_data += len(data)
-                loss_mean = (loss_mean * batch_idx + loss) / (batch_idx + 1)
-                correct += self.get_correct(y_pred, y_true) if self.metrics else 0.
+                loss_mean += (loss - loss_mean) / (batch_idx + 1)
+                correct += self.get_correct(y_pred, y_true, self.metrics)
 
-            self.msg.msg_out(loss_mean, 1.0 * correct / num_data, cur_batch=batch_idx + 1, count_batch=count_batch)
+            self.msg.msg_out(loss_mean, 1.0 * correct / num_data, is_append=True,
+                             cur_batch=batch_idx + 1, count_batch=count_batch)
 
             # 测试
             if validation_batch_size is not None and 0 == (batch_idx + 1) % validation_batch_size:
-                self.valid_once(validation_data)
+                msg_prefix = self.msg.make_cover(loss_mean, 1.0 * correct / num_data,
+                                                 cur_batch=batch_idx + 1, count_batch=count_batch)
+                self.valid_once(validation_data, msg_prefix)
+        return loss_mean, 1.0 * correct / num_data, count_batch
 
-    def valid_once(self, valid_loader):
+    def train_step(self, data, y_true, **kwargs):
+        self.train()
+        y_true = self.target_to(y_true, data.shape, device=self.device)
+        data = self.data_to(data, device=self.device)
+        self.optimizer.zero_grad()
+        y_pred = self(data)
+        loss = self.loss(y_pred, y_true)
+        loss.backward()
+        self.optimizer.step()
+
+        # 输出信息
+        num_data = len(data)
+        correct = self.get_correct(y_pred, y_true, self.metrics)
+
+        # checkpoint
+        if self.checkpoint_fn is not None and 'is_save' in kwargs and kwargs['is_save']:
+            self.checkpoint_fn(self, accuracy=1.0 * correct / num_data, loss=loss)
+
+        self.msg.msg_out(loss, 1.0 * correct / num_data, is_append=True, cur_batch=1, count_batch=1)
+        return loss.item(), correct
+
+    def valid_once(self, valid_loader, msg_prefix=''):
         """valid_once
 
         Args:
             valid_loader:
+            msg_prefix:
 
         Returns:
             None
         """
         self.eval()
         correct = 0
+        num_data = 0
         loss_mean = 0.
         with torch.no_grad():
-            for data, y_true in valid_loader:
-                y_true = self.target_to(y_true, device=self.device)
-                y_pred = self(data.to(self.device))
-                loss_mean += self.loss(y_pred, y_true)
-                correct += self.get_correct(y_pred, y_true) if self.metrics else 0.
+            count_data = len(valid_loader.dataset)
+            count_batch = (count_data + valid_loader.batch_size - 1) // valid_loader.batch_size
+            for batch_idx, (data, y_true) in enumerate(valid_loader):
+                y_true = self.target_to(y_true, data.shape, device=self.device)
+                data = self.data_to(data, device=self.device)
+                y_pred = self(data)
+                loss = self.loss(y_pred, y_true)
 
-        # 输出信息
-        loss_mean /= len(valid_loader.dataset)
-        val_acc = 1. * correct / len(valid_loader.dataset)
+                # 输出信息
+                num_data += len(data)
+                loss_mean += (loss - loss_mean) / (batch_idx + 1)
+                correct += self.get_correct(y_pred, y_true, self.metrics)
+                self.msg.msg_out(msg_prefix=msg_prefix, cur_batch=batch_idx + 1, count_batch=count_batch)
+        val_acc = 1.0 * correct / num_data
         self.msg.msg_out(loss_mean, val_acc, is_wrap=True, prefix='val_')
 
         # checkpoint
@@ -409,19 +452,29 @@ class NNet(Module):
                 self.load_state_dict(state_dict)
         return is_exist
 
-    @staticmethod
-    def target_to(y_true, device=torch.device('cpu')):
+    def target_to(self, y_true, shape, device=torch.device('cpu')):
+        if self.targets_fn is not None:
+            y_true = self.targets_fn(y_true, shape)
         if isinstance(y_true, torch.Tensor):
             y_true = y_true.to(device)
         elif isinstance(y_true, list):
             for i in range(len(y_true)):
                 y_true[i] = y_true[i].to(device)
+            y_true[0] = y_true[0].long()
         return y_true
 
+    def data_to(self, data, device=torch.device('cpu')):
+        if self.data_fn is not None:
+            data = self.data_fn(data)
+        return data.to(device)
+
     @staticmethod
-    def get_correct(y_pred, y_true):
+    def get_correct(y_pred, y_true, metrics):
         # get the index of the max log-probability
         prob_pred = y_pred if isinstance(y_pred, torch.Tensor) else y_pred[0]
         targets_true = y_true if isinstance(y_true, torch.Tensor) else y_true[0]
-        targets_pred = prob_pred.argmax(dim=1, keepdim=True)  
-        return targets_pred.eq(targets_true.view_as(targets_pred)).sum().item()
+        targets_pred = prob_pred.argmax(dim=1, keepdim=True)
+        if metrics:
+            return targets_pred.eq(targets_true.view_as(targets_pred)).sum().item()
+        else:
+            return 0.

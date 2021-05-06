@@ -1,3 +1,4 @@
+# coding=utf-8
 import os
 import pickle
 import dill
@@ -7,10 +8,11 @@ import torch
 import torch.nn as nn
 import yaml
 
-from base.model import ModelCheckpoint as MCp, NNet
 from base.utils import check_dirs
-from chess_manual.manualloader import DataLoader
-from segmentation.yolo.yolo_blocks import create_yolo_blocks
+from base.model import ModelCheckpoint as MCp, NNet
+from chess_manual.chess_board import ChessBoard, ChessGame
+from chess_manual.manualloader import DataLoader, PolicyNet
+from chess_manual.mcts_alpha_zero import MCPlayer
 
 
 def load_breakpoint(net, data_name='',
@@ -22,15 +24,17 @@ def load_breakpoint(net, data_name='',
                     map_location=None,
                     pickle_module=pickle,
                     rm_saved_net=False):
-    """
+    """load_breakpoint
+        断点续训
+
     Args:
-        net:
-        data_name (str):
-        class_name (str):
-        weights_root:
-        save_weights_only:
-        save_best_only:
-        check_ckpt:
+        net: 网络
+        data_name (str): 数据集模型
+        class_name (str): 网络模型名称
+        weights_root: 权重文件目录
+        save_weights_only: 是否仅保存权重
+        save_best_only: 是否仅保存最优权重
+        check_ckpt: 是否检测配置
         map_location:
         pickle_module:
         rm_saved_net:
@@ -53,17 +57,6 @@ def load_breakpoint(net, data_name='',
     return MCp(filename, save_weights_only, save_best_only, pickle_module=pickle_module)
 
 
-def target_fn(targets):
-    device = targets.device
-    winners_z = torch.ones_like(targets)
-    targets = targets - 225
-    winners_z[targets < 0] = -1.0
-    winners_z[targets > 0] = 1.0
-    winners_z.unsqueeze_(-1)
-    targets = torch.abs_(targets) - 1
-    return [targets.to(device=device), winners_z.to(dtype=torch.float,device=device)]
-
-
 class PolicyNetLoss(nn.Module):
     """PolicyNetLoss
 
@@ -75,51 +68,38 @@ class PolicyNetLoss(nn.Module):
             pnl_loss = loss([act_pred, state_pred], y_true)
     """
 
-    def __init__(self, weight=(1.0, 1.0), target_transform=None):
+    def __init__(self, weight=(1.0, 1.0)):
         super(PolicyNetLoss, self).__init__()
         if not isinstance(weight, np.ndarray):
             weight = np.array(weight)
         self.weight = weight / weight.prod()
-        self.target_transform = target_transform
         self.act_loss = nn.NLLLoss()
         self.state_loss = nn.MSELoss()
 
     def forward(self, y_pred, y_true):
-        y_true[1] = y_true[1].unsqueeze_(-1).to(y_pred[1].dtype)
+        y_true[1] = y_true[1].to(y_pred[1].dtype)
         return self.act_loss(y_pred[0], y_true[0]) + self.state_loss(y_pred[1], y_true[1])
 
 
-def net_train(epochs=600, data_root_dir='~/.dataset/data_paper/'):
-    layers_fn_dict = {
-        'create_yolo_blocks': create_yolo_blocks,
-    }
-
-    batch_size = 128
+def train(net, epochs=600, batch_size=256, data_root_dir='~/.dataset/data_paper/'):
     device = torch.device('cuda')
+    net = net.to(device)
 
     # 导入数据
     dataLoader = DataLoader(data_root_dir, batch_size=batch_size, shuffle=True)
     train_loader = dataLoader['train']
     val_loader = dataLoader['val']
 
-    # 创建网络
-    with open('cfg/policy_net.yaml') as f:
-        net_cfg = yaml.load(f, Loader=yaml.SafeLoader)
-        layers_fn = layers_fn_dict[net_cfg['layers_fn']] if 'layers_fn' in net_cfg else None
-        net = NNet(net_cfg, layers_fn=layers_fn).to(device)
-
     # 断点续训
-    dataset_name = train_loader.dataset.__class__.__name__
+    dataset_name = 'WZQManuals'
     class_name = net.__class__.__name__
     cp_callback = load_breakpoint(net, dataset_name, class_name, save_weights_only=True,
                                   map_location=device, pickle_module=dill)
 
     # 损失函数
-    loss = PolicyNetLoss(target_transform=target_fn)
-    net.compile(optimizer='adam',
-                loss=loss,
-                device=device,
-                metrics=['acc'])
+    loss = PolicyNetLoss()
+    net.compile(optimizer='adam', loss=loss, metrics=['acc'], device=device, targets_fn=dataLoader.target_fn,
+                data_fn=dataLoader.data_fn)
 
     # 训练
     net.fit_generator(train_loader,
@@ -127,7 +107,33 @@ def net_train(epochs=600, data_root_dir='~/.dataset/data_paper/'):
                       epochs=epochs,
                       validation_data=val_loader,
                       callbacks=[cp_callback])
+    pass
+
+
+def auto_play():
+    num_roll_out = 256
+    while True:
+        cfg_net_one = 'cfg/policy_net_big.yaml'
+        cfg_net_two = 'cfg/policy_net_big.yaml'
+        policy_trainer, policy_player = PolicyNet(cfg_net_two, is_training=True), PolicyNet(cfg_net_one)
+        mcts_trainer = MCPlayer(policy_trainer.policy_value_fn, num_roll_out=num_roll_out)
+        mcts_player = MCPlayer(policy_player.policy_value_fn, num_roll_out=num_roll_out)
+        trainer_game = ChessGame(ChessBoard(), mcts_trainer, mcts_player, buffer_size=100000)
+        trainer_game.auto_play(13)
+    pass
+
+
+def train_net(net_cfg_file='cfg/policy_net_res.yaml', data_root_dir='~/.dataset/wuziqi/images'):
+    # 创建网络
+    with open(net_cfg_file) as f:
+        net_cfg = yaml.load(f, Loader=yaml.SafeLoader)
+        net_trainer = NNet(net_cfg)
+
+    train(net_trainer, epochs=100, batch_size=256, data_root_dir=data_root_dir)
+    pass
 
 
 if __name__ == '__main__':
-    net_train(100, data_root_dir='./data/chess_manual/wuziqi')
+    auto_play()
+    # train_net()
+    pass

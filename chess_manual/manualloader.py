@@ -1,14 +1,24 @@
+# coding=utf-8
 import os
+import pickle
 import random
+
+import dill
 import torch
 
 import cv2
 import numpy as np
 import torch.utils.data as udata
 import torchvision.transforms as transforms
+import yaml
+from torch import nn
 
 from torchvision import datasets as ds
 from torchvision.transforms import transforms
+
+from base.model import NNet, ModelCheckpoint as MCp
+from base.utils import check_dirs
+from chess_manual.chessboard_define import cbd
 
 
 def create_state(chess_manual, value=255):
@@ -54,7 +64,7 @@ class DataLoader:
                  batch_size=128,
                  num_workers=4,
                  shuffle=True):
-        batch_size = batch_size // 4
+        batch_size = batch_size // 16
         transform_list = []
         keys = ['train', 'val']
         dataset_name = os.path.basename(data_root)
@@ -86,7 +96,8 @@ class DataLoader:
         return self.data_loaders[item]
 
     @staticmethod
-    def target_fn(targets):
+    def target_fn(targets, shape):
+        count_targets = (shape[-1] // 15) * (shape[-2] // 15)
         device = targets.device
         winners_z = torch.ones_like(targets, dtype=torch.float)
         targets = targets - 225
@@ -94,14 +105,18 @@ class DataLoader:
         winners_z[targets > 0] = 1.0
         winners_z.unsqueeze_(-1)
         targets = torch.abs_(targets) - 1
-        winners_z = torch.cat([winners_z for _ in range(4)], dim=0)
-        targets = torch.cat([targets for _ in range(4)], dim=0)
+        winners_z = torch.cat([winners_z for _ in range(count_targets)], dim=0)
+        targets = torch.cat([targets for _ in range(count_targets)], dim=0)
         return [targets.to(device=device), winners_z.to(device=device)]
 
     @staticmethod
     def data_fn(data):
-        data_list = [data[:, :, :15, :15], data[:, :, :15, 15:],
-                     data[:, :, 15:, 15:], data[:, :, 15:, :15]]
+        shape = data.shape
+        data_list = list()
+        for i in range(shape[-1] // 15):
+            row_s, row_e = i * 15, (i + 1) * 15
+            row_imgs = data[:, :, :, row_s:row_e]
+            data_list += [row_imgs[:, :, j * 15:(j + 1) * 15, :] for j in range(shape[-2] // 15)]
         return torch.cat(data_list, dim=0)
 
     @staticmethod
@@ -197,6 +212,9 @@ class ManualSectionCreator:
         # return random.sample(self.data_buffer, self.batch_size)
 
     def revert_manual_step(self, chess_manual, winner):
+        if len(chess_manual) < 120:
+            return list()
+
         manuals = list()
         last_move = -1
         for i, step in enumerate(chess_manual):
@@ -214,10 +232,11 @@ class ManualSectionCreator:
 
     def filter_save_state(self, idx, loc_state, winner_z, move, manual):
         len_manual = len(manual)
-        if (len_manual > 50 and not (len_manual // 2 < idx < len_manual - 6) or
-                (len_manual < 15 and idx > len_manual - 3) or
-                (15 <= len_manual <= 50 and idx > len_manual - 5)):
-            self.save_state(loc_state, winner_z, move)
+        self.save_state(loc_state, winner_z, move)
+        # if (len_manual > 50 and not (len_manual // 2 < idx < len_manual - 6) or
+        #         (len_manual < 15 and idx > len_manual - 3) or
+        #         (15 <= len_manual <= 50 and idx > len_manual - 5)):
+        #     self.save_state(loc_state, winner_z, move)
         pass
 
     def save_state(self, state, winner_z, move):
@@ -232,10 +251,12 @@ class ManualSectionCreator:
         fp = os.path.join(self.obj_root, key, filename)
         img = np.transpose(np.array(state, dtype=np.uint8), axes=[1, 2, 0]) * 255
         self.imgs_dict[key].append(img)
-        if len(self.imgs_dict[key]) == 4:
+        num_row = 4
+        if len(self.imgs_dict[key]) == num_row * num_row:
             imgs_list = self.imgs_dict[key]
-            imgs = np.concatenate([np.concatenate([imgs_list[i * 2 + j] for j in range(2)], axis=1) for i in range(2)],
-                                  axis=0)
+            imgs = np.concatenate(
+                [np.concatenate([imgs_list[i * num_row + j] for j in range(num_row)],
+                                axis=1) for i in range(num_row)], axis=0)
             cv2.imwrite(fp, imgs)
             self.imgs_dict[key] = list()
         pass
@@ -335,3 +356,120 @@ class ManualSectionCreator:
             print(f'{str_node}')
             raise e
         pass
+
+
+class PolicyNetLoss(nn.Module):
+    """PolicyNetLoss
+
+        PolicyNet 的损失函数
+
+    Example:
+
+            loss = PolicyNetLoss()
+            pnl_loss = loss([act_pred, state_pred], y_true)
+    """
+
+    def __init__(self, weight=(1.0, 1.0)):
+        super(PolicyNetLoss, self).__init__()
+        if not isinstance(weight, np.ndarray):
+            weight = np.array(weight)
+        self.weight = weight / weight.prod()
+        self.act_loss = nn.NLLLoss()
+        self.state_loss = nn.MSELoss()
+
+    def forward(self, y_pred, y_true):
+        y_true[1] = y_true[1].to(y_pred[1].dtype)
+        return self.act_loss(y_pred[0], y_true[0]) + self.state_loss(y_pred[1], y_true[1])
+
+
+class PolicyNet(object):
+    """PolicyNet
+
+        该类主要用于强化训练, 直接将已经训练过的模型结果用于自动下棋.
+        然后胜利后, 下棋过程产生的棋谱直接用于训练.
+
+    """
+
+    def __init__(self, net_file, device=torch.device('cuda'), is_training=False, cls_name='PolicyPlayer'):
+        self.device = device
+        with open(net_file) as f:
+            self.net_cfg = yaml.load(f, Loader=yaml.SafeLoader)
+            self.net = NNet(self.net_cfg, cls_name=cls_name).to(device)
+
+        self.player_id = cbd.NoWinner
+        self.init_train_params(is_training)
+        pass
+
+    def get_action(self, board_section, available_moves=None):
+        act_prob = self.net(torch.Tensor(board_section[np.newaxis, :, :, :]).to(self.device))
+        action = act_prob[0].cpu().detach().numpy()
+        probs = act_prob[1].cpu().detach().numpy()
+        move_softmax = np.exp(action.flatten())[available_moves]
+        return available_moves[np.argmax(move_softmax)], probs
+
+    def policy_value_fn(self, board):
+        chess_type = board.get_current_player()
+        board_section = board.get_board_section(chess_type)
+        act_prob = self.net(torch.Tensor(board_section[np.newaxis, :, :, :]).to(self.device))
+        action = act_prob[0].cpu().detach().numpy()
+        probs = act_prob[1].cpu().detach().numpy()
+        move_softmax = np.exp(action.flatten())[board.available_moves]
+        return zip(board.available_moves, move_softmax), probs.item()
+
+    def set_player_id(self, idx=0):
+        self.player_id = idx
+        pass
+
+    def init_train_params(self, is_training, device=torch.device('cuda')):
+        dataset_name = 'WZQManuals'
+        class_name = self.net.__class__.__name__
+        cp_callback = load_breakpoint(self.net, dataset_name, class_name, save_weights_only=True,
+                                      map_location=device, pickle_module=dill)
+
+        if is_training:
+            # 损失函数
+            loss = PolicyNetLoss()
+            self.net.compile(optimizer='adam', loss=loss, metrics=['acc'], callbacks=[cp_callback], device=device,
+                             data_fn=DataLoader.data_fn)
+        pass
+
+
+def load_breakpoint(net, data_name='',
+                    class_name='',
+                    weights_root='./weights',
+                    save_weights_only=True,
+                    save_best_only=True,
+                    check_ckpt=False,
+                    map_location=None,
+                    pickle_module=pickle,
+                    rm_saved_net=False):
+    """load_breakpoint
+
+    Args:
+        net:
+        data_name (str):
+        class_name (str):
+        weights_root:
+        save_weights_only:
+        save_best_only:
+        check_ckpt:
+        map_location:
+        pickle_module:
+        rm_saved_net:
+    """
+    if data_name is None:
+        data_name = 'dataset'
+
+    mode = 'weight' if save_weights_only else 'model'
+    dir_path = check_dirs([data_name, class_name, mode], dir_root=os.path.abspath(weights_root))
+
+    filename = os.path.join(dir_path, f'{data_name}_{net.__class__.__name__}_{mode}.pt')
+    ckpt = MCp.ckpt_read(dir_path, ckpt_name=f'ckpt.yaml')
+    ckpt_file_name = filename
+    if check_ckpt and not os.path.exists(ckpt_file_name) and 'filename' in ckpt:
+        ckpt_file_name = ckpt['filename']
+    ckpt_file = ckpt_file_name + (ckpt['suffix_best'] if 'suffix_best' in ckpt else '')
+    if net.load_weights(ckpt_file, mode=mode, map_location=map_location, pickle_module=pickle_module):
+        print('----------------load the weight----------------')
+
+    return MCp(filename, save_weights_only, save_best_only, pickle_module=pickle_module)

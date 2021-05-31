@@ -1,0 +1,28 @@
+net_name: InceptionNet_v3B
+num_cls: 5
+img_size: [3, 224, 224]
+
+
+backbone:
+  # from, number, module, args[in_ch, out_ch, kernel_size=1, stride=1, padding='same', activation='relu', groups=1]
+  [
+    [-1, 1, FeatureExtractor, [64, 3, 1, 'same', True, 'relu']],
+    [-1, 1, InceptionBlock_v3B, [64]],
+    [-1, 1, FeatureExtractor, [128, 3, 1, 'same', True, 'relu']],
+    [-1, 1, InceptionBlock_v3B, [128]],
+    [-1, 1, FeatureExtractor, [256, 3, 1, 'same', True, 'relu']],
+    [-1, 1, FeatureExtractor, [256, 3, 1, 'same', True, 'relu']],
+    [-1, 1, InceptionBlock_v3B, [256]],
+    [-1, 1, FeatureExtractor, [512, 3, 1, 'same', True, 'relu']],
+    [-1, 1, FeatureExtractor, [512, 3, 1, 'same', True, 'relu']],
+    [-1, 1, InceptionBlock_v3B, [512]],
+  ]
+
+
+head:
+  [
+    [-1, 1, RoIFlatten, [[7, 7]]],
+    [-1, 1, Dense, [512, 'relu']],
+    [-1, 1, Dense, [512, 'relu']],
+    [-1, 1, Dense, [num_cls, 'softmax']],
+  ]

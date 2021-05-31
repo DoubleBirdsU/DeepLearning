@@ -1,0 +1,28 @@
+net_name: ResNet18
+num_cls: 5
+img_size: [3, 224, 224]
+roi_size: [7, 7]
+res_block: ResBlockA
+
+
+backbone:
+  # from, number, module, args[in_ch, out_ch, kernel_size=1, stride=1, padding='same', activation='relu', groups=1]
+  [
+    # args[out_ch, kernel_size=1, stride=1, padding='same', activation='relu', groups=1]
+    [-1, 1, ConvSameBnRelu2D, [64, 3, 2]],
+    # args[kernel_size, stride, padding='valid', padding_value=0.]
+    [-1, 1, MaxPool2D, [3, 2, 'same']],
+
+    # args[out_ch, hid_ch, num_layer, res_block, residual_path_first='conv']
+    [-1, 1, ResConvBlock, [256, 64, 2, res_block]],
+    [-1, 1, ResConvBlock, [512, 128, 2, res_block]],
+    [-1, 1, ResConvBlock, [1024, 256, 2, res_block]],
+    [-1, 1, ResConvBlock, [2048, 512, 2, res_block]],
+  ]
+
+head:
+  [
+    [-1, 1, RoIFlatten, [roi_size]],
+    # args[out_ch, activation, bias=True]
+    [-1, 1, Dense, [num_cls, 'valid']],
+  ]

@@ -1,0 +1,40 @@
+# net_name, num_cls, img_size, backbone, head
+net_name: SSD_SPP
+num_cls: 21
+img_size: [3, 300, 300]
+
+
+backbone:
+  # [from, number, module, args]
+  [
+    [-1, 1, FeatureExtractor, [3, 64, 7, 2, 'same', 1, True, 'relu', 3, 2]],
+    [-1, 1, ResConvBlock, [64, 256, 64, 3, ResBlockB]],
+    [-1, 1, ResConvBlock, [256, 512, 128, 4, ResBlockB]],
+    [-1, 1, ResConvBlock, [512, 1024, 256, 6, ResBlockB]],
+    [-1, 1, RoI, [38, 38]],
+    [-1, 1, ResConvBlock, [1024, 2048, 512, 3, ResBlockB]],
+  ]
+
+
+head:
+  # [from, number, module, args]
+  [
+    [-2, 1, SSDClassifier, [1024, num_cls, 4]]
+
+    [-2, 1, SSDBlock, [2048, 1024, 1024, 1, [3, 1]]],
+    [-1, 1, SSDClassifier, [1024, num_cls, 6]],
+
+    [-2, 1, SSDBlock, [1024, 512, 256, 2]],
+    [-1, 1, SSDClassifier, [512, num_cls, 6]],
+
+    [-2, 1, SSDBlock, [512, 256, 128, 2]],
+    [-1, 1, SSDClassifier, [256, num_cls, 6]],
+
+    [-2, 1, SSDBlock, [256, 256, 128, 2]],
+    [-1, 1, SSDClassifier, [256, num_cls, 4]],
+
+    [-2, 1, SSDBlock, [256, 256, 128, 2]],
+    [-1, 1, SSDClassifier, [256, num_cls, 4]],
+
+    [[-11, -9, -7, -5, -3, -1], 1, Concat, [2]]
+  ]

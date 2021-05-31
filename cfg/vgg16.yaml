@@ -1,0 +1,26 @@
+net_name: VGG16
+num_cls: 5
+img_size: [3, 384, 384]
+roi_size: [6, 6]
+
+
+backbone:
+  # from, number, module, args[in_ch, out_ch, kernel_size=1, stride=1, padding='same', activation='relu', groups=1]
+  [
+    # args[out_ch, kernel_size=3, num_layer=2, pool_size=1, pool_stride=1]
+    [-1, 1, VGGPoolBlock, [64, 3, 2, 3, 2]],
+    [-1, 1, VGGPoolBlock, [128, 3, 2, 3, 2]],
+    [-1, 1, VGGPoolBlock, [256, 3, 3, 3, 2]],
+    [-1, 1, VGGPoolBlock, [512, 3, 3, 3, 2]],
+    [-1, 1, VGGPoolBlock, [512, 3, 3, 3, 2]],
+  ]
+
+
+head:
+  [
+    [-1, 1, RoIFlatten, [roi_size]],
+    # args[out_ch, activation, bias=True]
+    [-1, 1, Dense, [512, 'relu']],
+    [-1, 1, Dense, [512, 'relu']],
+    [-1, 1, Dense, [num_cls, 'softmax']]
+  ]

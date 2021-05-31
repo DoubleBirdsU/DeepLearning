@@ -1,0 +1,24 @@
+net_name: LeNet
+num_cls: 5
+img_size: [3, 32, 32]
+
+
+backbone:
+  # from, number, module, args[in_ch, out_ch, kernel_size=1, stride=1, padding='same', activation='relu', groups=1]
+  [
+    # args[out_ch, kernel_size=1, stride=1, padding='same', activation='relu', groups=1]
+    [-1, 1, ConvSameBnRelu2D, [6, 5, 1, 'valid']],
+    [-1, 1, ConvSameBnRelu2D, [6, 5, 2, 'same']],
+    [-1, 1, ConvSameBnRelu2D, [16, 5, 1, 'valid']],
+    [-1, 1, ConvSameBnRelu2D, [16, 5, 2, 'same']],
+  ]
+
+
+head:
+  [
+    [-1, 1, RoIFlatten, [[5, 5]]],
+    # args[out_ch, activation, bias]
+    [-1, 1, Dense, [120, 'relu']],
+    [-1, 1, Dense, [84, 'relu']],
+    [-1, 1, Dense, [num_cls, 'valid']]
+  ]

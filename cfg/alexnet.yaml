@@ -1,0 +1,46 @@
+net_name: AlexNet
+num_cls: 5
+img_size: [3, 32, 32]
+
+
+# 参数解析方式: list, dict[key:value]
+backbone:
+  # from, number, module, args[in_ch, out_ch, kernel_size=1, stride=1, padding='same', activation='relu', groups=1]
+  [
+    # args[out_ch, kernel_size=1, stride=1, padding='same', activation='relu', groups=1]
+    [-1, 1, ConvSameBnRelu2D, [6, 5], {padding: valid}],
+    [-1, 1, ConvSameBnRelu2D, [6, 5], {stride: 2}],
+    [-1, 1, ConvSameBnRelu2D, [16, 5], {padding: valid}],
+    [-1, 1, ConvSameBnRelu2D, [16, 5], {stride: 2}],
+  ]
+
+
+head:
+  [
+    [-1, 1, RoIFlatten, {roi_size: [5, 5]}],
+    # args[out_ch, activation, bias]
+    [-1, 1, Dense, [4096, relu]],
+    [-1, 1, Dense, [84, relu]],
+    [-1, 1, Dense, [num_cls, valid]]
+  ]
+
+
+#class AlexNet(NNet):
+#    def __init__(self, num_cls=1000, img_size=(3, 224, 224), roi_size=None, kernels_size=(11, 5, 3, 3, 3)):
+#        super(AlexNet, self).__init__()
+#        roi_size = self.get_roi_size(roi_size, img_size[1:], down_size=16, channels_bias=-1)
+#        self.block_list = [
+#            AlexBlock((img_size[0], 48), (48, 128), kernels_size[:2], (2, 2), padding='same', pool=True),
+#            AlexBlock((256, 192, 192), (192, 192, 128), kernels_size[2:], 2, padding='same'),
+#            MaxPool2D(3, 1, 'same'),
+#            RoIDense(256, 4096, roi_size, 'relu'),
+#            Dense(4096, 4096, 'relu'),
+#            Dense(4096, num_cls, activation='softmax'),
+#        ]
+#        self.addLayers(self.block_list)
+#
+#    def forward(self, x):
+#        for block in self.block_list:
+#            x = block(x)
+#        return x
+

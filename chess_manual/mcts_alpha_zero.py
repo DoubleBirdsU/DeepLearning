@@ -72,7 +72,7 @@ class Node(object):
         Args:
             c_puct: (0, inf)
         """
-        self._adjusted_pro = (c_puct * self._self_value * np.sqrt(self.parent.num_visited) / (self.num_visited + 1))
+        self._adjusted_pro = (c_puct * self._prior_pro * np.sqrt(self.parent.num_visited) / (self.num_visited + 1))
         return self._self_value + self._adjusted_pro
 
     def is_leaf(self):
@@ -145,6 +145,17 @@ class MCTreeSearch(object):
         act_probs = softmax(1.0 / temp * np.log(np.array(visits) + 1.0e-10))
         return acts, act_probs
 
+    def get_move_probs_v2(self, board: ChessBoard, temp=1.0e-3):
+        action_probs, leaf_value = self.policy_value_fn(board)
+        acts, act_probs = zip(*action_probs)
+        probs = np.array(act_probs)
+        visited = np.zeros(len(act_probs))
+        acts_idx = np.arange(len(acts))
+        for i in range(512):
+            move = np.random.choice(acts_idx, p=probs)
+            visited[move] += 1
+        return acts, visited / visited.sum()
+
     def update_with_move(self, move):
         if move in self.root.children:
             self.root = self.root.children[move]
@@ -164,8 +175,10 @@ class MCPlayer(object):
         AI player based on MCTS.
     """
 
-    def __init__(self, policy_value_fn, c_puct=5, num_roll_out=2000, is_self_play=False):
-        self.mcts = MCTreeSearch(policy_value_fn, c_puct, num_roll_out)
+    def __init__(self, policy_trainer, c_puct=5, num_roll_out=2000, is_self_play=False):
+        self.trainer = policy_trainer
+        self.mcts = MCTreeSearch(policy_trainer.policy_value_fn, c_puct, num_roll_out)
+        self.net = policy_trainer.net
         self.is_self_play = is_self_play
         self.player_id = 0
         pass
@@ -178,7 +191,7 @@ class MCPlayer(object):
         self.player_id = player_id
         pass
 
-    def get_action(self, board: ChessBoard, temp=1e-3, return_prob=False):
+    def get_action(self, board: ChessBoard, temp=1e-3, return_prob=False, move_version='v1'):
         """get_action
             获取下一次动作, 根据 MCTS 及 模型评估网络, 进行按概率获取下一次动作.
 
@@ -186,6 +199,7 @@ class MCPlayer(object):
             board: 当前棋局状态
             temp:
             return_prob: 是否返回 MCTS 概率分布
+            move_version: 'v1', 'v2'
         """
         sensible_moves = board.available_moves
         move_probs = np.zeros(board.count_chess)
@@ -193,17 +207,20 @@ class MCPlayer(object):
             print("WARNING: the board is full!")
             return (-1, move_probs) if return_prob else -1
 
-        acts, probs = self.mcts.get_move_probs(board, temp)
-        move_probs[list(acts)] = probs
+        if 'v1' == move_version:
+            acts, probs = self.mcts.get_move_probs(board, temp)
+        else:
+            acts, probs = self.mcts.get_move_probs_v2(board, temp)
         # 按照指定的概率选取下一次动作, 并更新 MCTS
         if self.is_self_play:  # 自我对奕
-            move = np.random.choice(
-                acts, p=0.75 * probs + 0.25 * np.random.dirichlet(0.3 * np.ones(len(probs))))
+            dirichlet_probs = 0.8 * np.array(probs) + 0.2 * np.random.dirichlet(0.3 * np.ones(len(probs)))
+            move = np.random.choice(acts, p=dirichlet_probs / dirichlet_probs.sum())
             self.mcts.update_with_move(move)
         else:  # 与其他棋手对奕, 获取动作后重置 MCTS
             move = np.random.choice(acts, p=probs)
             self.reset_player()
-            pass
+
+        move_probs[list(acts)] = probs
         return (move, move_probs) if return_prob else move
 
     def __str__(self):

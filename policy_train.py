@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import yaml
+import chess_manual.chess_model as chess
 
 from base.utils import check_dirs
 from base.model import ModelCheckpoint as MCp, NNet
@@ -111,29 +112,47 @@ def train(net, epochs=600, batch_size=256, data_root_dir='~/.dataset/data_paper/
 
 
 def auto_play():
+    num_roll_out = 400
+    mcts_player = None
+    cfg_net_one = 'cfg/policy_net_big.yaml'
+    cfg_net_two = 'cfg/policy_net_big.yaml'
+    while True:
+        net_trainer = chess.BackBoneNetTiny_v2(15, 15)
+        policy_trainer = PolicyNet(net_trainer, is_training=True)
+        mcts_trainer = MCPlayer(policy_trainer, num_roll_out=num_roll_out, is_self_play=True)
+        # mcts_player = MCPlayer(policy_player.policy_value_fn, num_roll_out=num_roll_out)
+        trainer_game = ChessGame(ChessBoard(), mcts_trainer, mcts_player, buffer_size=10000, is_self_play=True)
+        trainer_game.auto_play(13)
+    pass
+
+
+def auto_choice_play():
     num_roll_out = 256
     while True:
         cfg_net_one = 'cfg/policy_net_big.yaml'
         cfg_net_two = 'cfg/policy_net_big.yaml'
         policy_trainer, policy_player = PolicyNet(cfg_net_two, is_training=True), PolicyNet(cfg_net_one)
-        mcts_trainer = MCPlayer(policy_trainer.policy_value_fn, num_roll_out=num_roll_out)
-        mcts_player = MCPlayer(policy_player.policy_value_fn, num_roll_out=num_roll_out)
-        trainer_game = ChessGame(ChessBoard(), mcts_trainer, mcts_player, buffer_size=100000)
+        # mcts_trainer = MCPlayer(policy_trainer.policy_value_fn, num_roll_out=num_roll_out)
+        # mcts_player = MCPlayer(policy_player.policy_value_fn, num_roll_out=num_roll_out)
+        trainer_game = ChessGame(ChessBoard(), policy_trainer, policy_player, buffer_size=100000)
         trainer_game.auto_play(13)
     pass
 
 
 def train_net(net_cfg_file='cfg/policy_net_res.yaml', data_root_dir='~/.dataset/wuziqi/images'):
     # 创建网络
-    with open(net_cfg_file) as f:
-        net_cfg = yaml.load(f, Loader=yaml.SafeLoader)
-        net_trainer = NNet(net_cfg)
+    # with open(net_cfg_file) as f:
+    #     net_cfg = yaml.load(f, Loader=yaml.SafeLoader)
+    #     net_trainer = NNet(net_cfg)
+    net_trainer = chess.BackBoneNetTiny_v2(15, 15)
+    # net_trainer.freeze_all_conv()
 
-    train(net_trainer, epochs=100, batch_size=256, data_root_dir=data_root_dir)
+    train(net_trainer, epochs=16, batch_size=1024, data_root_dir=data_root_dir)
     pass
 
 
 if __name__ == '__main__':
     auto_play()
     # train_net()
+    # auto_choice_play()
     pass

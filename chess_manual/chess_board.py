@@ -1,56 +1,53 @@
+import time
+import random
+
 import dill
 import numpy as np
 import torch
 
 from chess_manual.checkwin import CheckWinNet
+from chess_manual.chess_utils import rot90moves, fliplrmoves, rot90probs, fliplrprobs, flatten2node
 from chess_manual.chessboard_define import cbd
 from chess_manual.manual_api import MCPlayer
-from chess_manual.manualloader import DataLoader, PolicyNetLoss, load_breakpoint
+from chess_manual.manualloader import PolicyNetLoss, load_breakpoint, softmax
 
 
-def rot90board(chess_manual, axes=0, out_type='node', board_size=(15, 15)):
-    """rot90board
-        逆时针旋转棋盘对局 90 度
+def get_extend_manual(winner, chess_manual, move_prob, board_sections, move_scale=1.0, board_size=(15, 15)):
+    num_step = len(chess_manual)
+    up_scale, down_scale = 1.01, 0.999
 
-    Args:
-        chess_manual: 棋谱
-        axes: 旋转次数, 0: (w, h); 1: (h, wi-w); 2: (hi-h, wi-w); 3: (hi-h, w)
-        out_type: 'node', 'move'
-        board_size: 棋盘尺寸
-    """
-    if isinstance(chess_manual, tuple) or isinstance(chess_manual, list):
-        chess_manual = np.array(chess_manual)
-    wi, hi = board_size[0] - 1, board_size[1] - 1
-    ret_manual = np.copy(chess_manual)
-    if axes % 4 == 1:
-        ret_manual[:, 0] = chess_manual[:, 1]
-        ret_manual[:, 1] = wi - chess_manual[:, 0]
-    elif axes % 4 == 2:
-        ret_manual[:, 0] = hi - chess_manual[:, 1]
-        ret_manual[:, 1] = wi - chess_manual[:, 0]
-    elif axes % 4 == 3:
-        ret_manual[:, 0] = hi - chess_manual[:, 1]
-        ret_manual[:, 1] = chess_manual[:, 0]
-    if 'node' == out_type:
-        return ret_manual
-    else:
-        return ret_manual[:, 0] + ret_manual[:, 1] * board_size[0]
+    winners = -np.ones(num_step) * winner
+    winners[np.arange((num_step + 1) // 2) * 2] = winner
+
+    log_step = np.log(0.5) / (num_step - 1)
+    for i in range(num_step):
+        win = (1 - i % 2 * 2) * winner
+        move_prob[i][chess_manual[i]] *= up_scale if win > 0 else down_scale
+        move_prob[i] = move_prob[i] / move_prob[i].sum()
+
+        # winners[i] *= np.exp((num_step - 1 - i) * log_step)
+
+    train_data = create_extend(chess_manual, np.array(move_prob), board_sections, move_scale, board_size)
+    return [[manual, winners, prob, sect] for manual, prob, sect in train_data]
 
 
-def rot90moves(moves_manual, axes=0, board_size=(15, 15)):
-    node_manual = np.zeros([len(moves_manual), 2], dtype=np.int)
-    node_manual[:, 0] = moves_manual // board_size[0]
-    node_manual[:, 1] = moves_manual % board_size[0]
-    node_manual = rot90board(node_manual, axes=axes, board_size=board_size)
-    return node_manual[:, 0] * board_size[0] + node_manual[:, 1]
+def create_extend(chess_manual, move_prob, board_sections, move_scale=1.0, board_size=(15, 15)):
+    manuals = [rot90moves(chess_manual, i, board_size) for i in range(4)]
+    manuals += [fliplrmoves(manual) for manual in manuals]
 
+    probs = [rot90probs(move_prob, i, board_size) for i in range(4)]
+    probs += [fliplrprobs(prob, board_size) for prob in probs]
 
-def fliplr90moves(moves_manual, board_size=(15, 15)):
-    node_manual = np.zeros([len(moves_manual), 2], dtype=np.int)
-    node_manual[:, 0] = moves_manual // board_size[0]
-    node_manual[:, 1] = moves_manual % board_size[0]
-    node_manual[:, 0] = board_size[0] - node_manual[:, 0] - 1
-    return node_manual[:, 0] * board_size[0] + node_manual[:, 1]
+    sects = [np.rot90(board_sections, i, axes=(-2, -1)) for i in range(4)]
+    sects += [sect[..., ::-1, :] for sect in sects]
+
+    prob_1 = np.zeros_like(probs[0][0, ...])
+    for prob in probs:
+        prob_1 += prob[1, ...]
+    prob_1 = prob_1 / prob_1.sum()
+    for prob in probs:
+        prob[1, ...] = prob_1
+    return zip(manuals, probs, sects)
 
 
 class ChessBoard:
@@ -69,7 +66,7 @@ class ChessBoard:
 
         # 状态
         self.winner = cbd.NoWinner
-        self.available_moves = [move for move in range(self.count_chess)]
+        self.available_moves = list()
 
         self.check_win = CheckWinNet(board_size, nlc_min)
         self.init_boards()
@@ -95,6 +92,15 @@ class ChessBoard:
     def init_boards(self):
         """黑子先手"""
         self.check_win.init()
+        self.states = dict()
+        self.boards = list()
+        self.buffer = list()
+        self.move_buffer = list()
+        self.winners_buffer = list()
+
+        # 其他重置
+        self.winner = cbd.NoWinner
+        self.available_moves = [move for move in range(self.count_chess)]
         self.boards = list([None] + [np.zeros((4, self.board_size[0], self.board_size[1])) for _ in range(2)])
         self.boards[cbd.BlackChess][3][:, :] = 1.0
         pass
@@ -102,9 +108,12 @@ class ChessBoard:
     def update_board(self, move, player_id):
         self.states[move] = player_id
         self.available_moves.remove(move)
+        self.move_buffer.append(move)
 
-        node = self.flatten2node(move, is_flip=False)
+        node = flatten2node(move)
         self.check_win.update_board_chess(node, player_id)
+        self.winner = self.check_win(node)
+
         (width, _) = self.board_size
         wi, hi = move // width, move % width
         self.boards[player_id][0][wi, hi] = 1.0
@@ -119,70 +128,99 @@ class ChessBoard:
             return np.copy(curr_board[:, ::-1, :])
         return curr_board
 
-    def get_board_section(self, chess_type, move=0):
+    def get_board_section(self, chess_type, move=-1):
+        board_section = np.copy(self.boards[chess_type])
         if 0 <= move < self.count_chess:
-            board_section = np.copy(self.boards[chess_type])
             wi, hi = move // self.board_size[0], move % self.board_size[1]
             board_section[1:3, wi, hi] = 1.0
-            return np.copy(board_section[:, ::-1, :])
-        return None
+        return np.copy(board_section[:, ::-1, :])
 
-    def flatten2node(self, flatten, is_flip=True):
-        """flatten2node
-            3*3 board's moves like:
-            6 7 8
-            3 4 5
-            0 1 2
-            and move 5's location is (1,2)
-        """
-        h, w = flatten % self.board_size[0], flatten // self.board_size[0]
-        return [w, h] if is_flip else [h, w]
+    def get_current_section(self):
+        return self.get_board_section(
+            -self.get_current_player(),
+            self.move_buffer[-1] if len(self.move_buffer) > 0 else -1)
 
-    def node2flatten(self, node, is_flip=True):
-        if len(node) != 2:
-            return -1
-        [h, w] = node if is_flip else [node[1], node[0]]
-        flatten = h * self.board_size[0] + w
-        return flatten if 0 <= flatten < self.count_chess else -1
+
+def targets_fn(x, *args, **kwargs):
+    return x
 
 
 class ChessGame(object):
-    def __init__(self, chess_board: ChessBoard, trainer=None, player=None, buffer_size=10000):
+    def __init__(self, chess_board: ChessBoard, trainer=None, player=None, buffer_size=10000, is_self_play=False):
         self.chess_board = chess_board
         self.trainer = trainer  # 训练器
         self.player = player    # 对手器
         self.buffer_size = buffer_size
+        self.is_self_play = is_self_play
         self.manuals_buffer = list()
+
+        self.trainer.is_self_play = is_self_play
         pass
 
-    def auto_play(self, epochs_exp=20, batch_size=256):
+    def auto_play(self, epochs_exp=20, epoch_size=1024):
         idx_first_play = 1
         epochs = 2 ** epochs_exp
-        policies = [None, self.trainer, self.player]
+        policies = [None, self.trainer, self.trainer if self.is_self_play else self.player]
+
+        device = torch.device('cuda')
+        net = self.trainer.net.to(device)
+
         for epoch in range(epochs):
             # 进行一局对战
-            winner, manual_states = self.play_one_game(policies[idx_first_play], policies[-idx_first_play])
+            winner, manual_state = self.play_one_game(policies[idx_first_play], policies[-idx_first_play])
 
             # 存储数据, 进行训练
             idx_first_play = -idx_first_play
-            self.manuals_buffer.append([winner, manual_states])
-            if len(self.manuals_buffer) > batch_size:
-                self.train_once(self.trainer.net, self.manuals_buffer, epoch)
+
+            self.manuals_buffer.extend(manual_state)
+            if (epoch + 1) % epoch_size == 0:
+                random.shuffle(self.manuals_buffer)
+                self.train_step(net, self.manuals_buffer, 1024)
+                self.manuals_buffer.clear()
+                print(f'\n\n========= Self-Play ==========')
         pass
 
-    def self_play(self, epochs_exp=20, batch_size=256):
-        idx_first_play = 1
-        epochs = 2 ** epochs_exp
-        policies = [None, self.trainer, self.trainer]
-        for epoch in range(epochs):
-            # 进行一局对战
-            winner, manual_states = self.play_one_game(policies[idx_first_play], policies[-idx_first_play])
+    @staticmethod
+    def train_step(net, manuals_buffer, batch_size=256, eopchs=64):
+        targets = list()
+        winners_z = list()
+        data = list()
+        for _, winners, target, state in manuals_buffer:
+            winners_z.append(winners)
+            targets.append(target)
+            data.append(state)
+        targets = np.concatenate(targets, axis=0)
+        winners_z = np.concatenate(winners_z, axis=0)
+        data = np.concatenate(data, axis=0)
 
-            # 存储数据, 进行训练
-            idx_first_play = -idx_first_play
-            self.manuals_buffer.append([winner, manual_states])
-            if len(self.manuals_buffer) > batch_size:
-                self.train_once(self.trainer.net, self.manuals_buffer, epoch)
+        num_data = data.shape[0] // batch_size * batch_size
+        mask = np.arange(num_data)
+        np.random.shuffle(mask)
+
+        targets = targets[mask, ...]
+        winners_z = winners_z[mask, ...]
+        data = data[mask, ...]
+
+        states, trues = list(), list()
+        for epoch in range(eopchs):
+            print(f'\nEpoch: {epoch + 1}')
+            count_batch = num_data // batch_size
+            loss_mean = 0.0
+            for i in range(count_batch):
+                if epoch == 0:
+                    idx_s, idx_e = i * batch_size, (i + 1) * batch_size
+                    data_state = torch.Tensor(data[idx_s:idx_e, ...])
+                    y_true = [torch.Tensor(targets[idx_s:idx_e, ...]),
+                              torch.Tensor(winners_z[idx_s:idx_e, ...]).unsqueeze_(-1)]
+                    states.append(data_state)
+                    trues.append(y_true)
+                else:
+                    data_state = states[i]
+                    y_true = trues[i]
+                loss, correct = net.train_step(data_state, y_true, cur_batch=i + 1, count_batch=count_batch)
+
+                loss_mean += (loss - loss_mean) / (i + 1)
+            net.checkpoint_fn(net, accuracy=0, loss=loss_mean)
         pass
 
     def play_one_game(self, player_one: MCPlayer, player_two: MCPlayer):
@@ -193,38 +231,49 @@ class ChessGame(object):
 
         moves = list()
         probs = list()
+        sects = list()
 
         curr_id = 1  # 开始一号(黑子)先手
         players = [None, player_one, player_two]
+        move_version = 'v1'
+        is_first = True
+        time_start = time.time()
         while True:
             curr_player = players[curr_id]
-            move, move_prob = curr_player.get_action(self.chess_board, temp=1.0, return_prob=True)
+            if is_first:
+                board_size = self.chess_board.board_size
+                count_chess = board_size[0] * board_size[1]
+                move, move_prob = count_chess // 2, np.zeros(count_chess)
+                move_prob[move] = 1.0
+                is_first = False
+            else:
+                move, move_prob = curr_player.get_action(
+                    self.chess_board, temp=1.0, return_prob=True, move_version=move_version)
 
             # 收集走子信息
             moves.append(move)
             probs.append(move_prob)
+            sects.append(self.chess_board.get_current_section())
 
             # 更新棋盘状态
             self.chess_board.update_board(move, curr_id)
-            self.chess_board.check_win(self.chess_board.flatten2node(move, is_flip=False))
             is_end, winner = self.chess_board.game_state()
             if is_end:
                 break
             curr_id = -curr_id
-        return winner, zip(moves, probs)
+        print(f'cast time: {time.time() - time_start}')
+        # 输出棋局
+        with open('./chess_manual/chess_cn/chess.txt', 'a+') as f:
+            f.write(f'{moves}\n')
+        return winner, get_extend_manual(winner, moves, probs, sects, move_scale=1.0)
 
     @staticmethod
-    def train_once(net, epochs=600, batch_size=256, data_root_dir='~/.dataset/data_paper/', **kwargs):
+    def train_once(net, epochs=600, batch_size=256, **kwargs):
         """train_once
             对网络 net 进行一轮训练, 并更新模型参数.
         """
         device = torch.device('cuda')
         net = net.to(device)
-
-        # 导入数据
-        dataLoader = DataLoader(data_root_dir, batch_size=batch_size, shuffle=True)
-        train_loader = dataLoader['train']
-        val_loader = dataLoader['val']
 
         # 断点续训
         dataset_name = 'WZQManuals'
@@ -234,18 +283,21 @@ class ChessGame(object):
 
         # 损失函数
         loss = PolicyNetLoss()
-        net.compile(optimizer='adam', loss=loss, metrics=['acc'], device=device, targets_fn=dataLoader.target_fn,
-                    data_fn=dataLoader.data_fn)
+        net.compile(optimizer='adam', loss=loss, metrics=['acc'], device=device, callbacks=[cp_callback])
 
         # 训练
-        net.fit_generator(train_loader,
-                          batch_size=batch_size,
-                          epochs=epochs,
-                          validation_data=val_loader,
-                          callbacks=[cp_callback])
+        # net.train_step(train_loader,
+        #                   batch_size=batch_size,
+        #                   epochs=epochs,
+        #                   validation_data=val_loader,
+        #                   callbacks=[cp_callback])
         pass
 
     def reset_game(self):
-        self.chess_board.init_boards()
-        self.trainer.reset_player()
-        self.player.reset_player()
+        if self.chess_board is not None:
+            self.chess_board.init_boards()
+        if self.trainer is not None and isinstance(self.trainer, MCPlayer):
+            self.trainer.reset_player()
+        if self.player is not None and isinstance(self.trainer, MCPlayer):
+            self.player.reset_player()
+        pass

@@ -18,7 +18,14 @@ from torchvision.transforms import transforms
 
 from base.model import NNet, ModelCheckpoint as MCp
 from base.utils import check_dirs
+from chess_manual.chess_utils import rot90board, node2flatten
 from chess_manual.chessboard_define import cbd
+
+
+def softmax(x):
+    probs = np.exp(x - np.max(x))
+    probs /= np.sum(probs)
+    return probs
 
 
 def create_state(chess_manual, value=255):
@@ -33,29 +40,6 @@ def create_state(chess_manual, value=255):
 
 def create_player(idx):
     return ManualSectionCreator.BlackChess if idx % 2 == 0 else ManualSectionCreator.WhiteCHess
-
-
-def rot90board(chess_manual, axis=0, board_size=(15, 15)):
-    """rot90board
-
-    Args:
-        axis = 0     1          2            3
-             w, h  h, wi-w  hi-h,wi-w    hi-h,w
-    """
-    if isinstance(chess_manual, tuple) or isinstance(chess_manual, list):
-        chess_manual = np.array(chess_manual)
-    wi, hi = board_size[0] - 1, board_size[1] - 1
-    ret_manual = np.copy(chess_manual)
-    if axis % 4 == 1:
-        ret_manual[:, 0] = chess_manual[:, 1]
-        ret_manual[:, 1] = wi - chess_manual[:, 0]
-    elif axis % 4 == 2:
-        ret_manual[:, 0] = hi - chess_manual[:, 1]
-        ret_manual[:, 1] = wi - chess_manual[:, 0]
-    elif axis % 4 == 3:
-        ret_manual[:, 0] = hi - chess_manual[:, 1]
-        ret_manual[:, 1] = chess_manual[:, 0]
-    return ret_manual
 
 
 class DataLoader:
@@ -211,17 +195,17 @@ class ManualSectionCreator:
         return manual_list
         # return random.sample(self.data_buffer, self.batch_size)
 
-    def revert_manual_step(self, chess_manual, winner):
-        if len(chess_manual) < 120:
+    def revert_manual_step(self, chess_manual, winner, min_step=28):
+        if len(chess_manual) < min_step:
             return list()
 
         manuals = list()
         last_move = -1
         for i, step in enumerate(chess_manual):
             player_idx = self.BlackChess if i % 2 == 0 else self.WhiteCHess
-            move = self.node2flatten(step, False)
+            move = node2flatten(step, self.board_size)
             loc_state = self.get_board(player_idx, last_move, is_copy=True)
-            winner_z = 1.0 if winner == player_idx else -1.0
+            winner_z = 1.0 if (winner == player_idx) or i < min_step // 2 else -1.0
             self.filter_save_state(i, loc_state, winner_z, move, chess_manual)
             manuals.append([loc_state, [move, winner_z]])
             self.update_board(move, player_idx)
@@ -303,24 +287,6 @@ class ManualSectionCreator:
         self.boards[self.BlackChess][3][:, :] = 1.0
         pass
 
-    def flatten2node(self, flatten, is_flip=True):
-        """
-        3*3 board's moves like:
-        6 7 8
-        3 4 5
-        0 1 2
-        and move 5's location is (1,2)
-        """
-        h, w = flatten % self.board_size[0], flatten // self.board_size[0]
-        return [w, h] if is_flip else [h, w]
-
-    def node2flatten(self, node, is_flip=True):
-        if len(node) != 2:
-            return -1
-        [h, w] = node if is_flip else [node[1], node[0]]
-        flatten = h * self.board_size[0] + w
-        return flatten if 0 <= flatten < self.count_chess else -1
-
     @staticmethod
     def walkFile(dir_root, suffix='.ui'):
         files_list = list()
@@ -358,6 +324,42 @@ class ManualSectionCreator:
         pass
 
 
+class FocalLoss(nn.Module):
+    def __init__(self, class_num, alpha=None, gamma=2, use_alpha=False, size_average=True):
+        super(FocalLoss, self).__init__()
+        self.class_num = class_num
+        self.alpha = alpha
+        self.gamma = gamma
+        if use_alpha:
+            self.alpha = torch.tensor(alpha).cuda()
+
+        self.softmax = nn.Softmax(dim=1)
+        self.use_alpha = use_alpha
+        self.size_average = size_average
+
+    def forward(self, y_pred, y_true):
+        prob = self.softmax(y_pred.view(-1, self.class_num))
+        prob = prob.clamp(min=0.0001, max=1.0)
+
+        target_ = y_true.cuda()
+
+        if self.use_alpha:
+            batch_loss = - self.alpha.double() * torch.pow(
+                1 - prob, self.gamma).double() * prob.log().double() * target_.double()
+        else:
+            batch_loss = - torch.pow(1 - prob, self.gamma).double() * prob.log().double() * target_.double()
+
+        batch_loss = batch_loss.sum(dim=1)
+
+        if self.size_average:
+            loss = batch_loss.mean()
+        else:
+            loss = batch_loss.sum()
+
+        return loss
+    pass
+
+
 class PolicyNetLoss(nn.Module):
     """PolicyNetLoss
 
@@ -374,7 +376,7 @@ class PolicyNetLoss(nn.Module):
         if not isinstance(weight, np.ndarray):
             weight = np.array(weight)
         self.weight = weight / weight.prod()
-        self.act_loss = nn.NLLLoss()
+        self.act_loss = FocalLoss(225)
         self.state_loss = nn.MSELoss()
 
     def forward(self, y_pred, y_true):
@@ -390,37 +392,41 @@ class PolicyNet(object):
 
     """
 
-    def __init__(self, net_file, device=torch.device('cuda'), is_training=False, cls_name='PolicyPlayer'):
+    def __init__(self, net, device=torch.device('cuda'), is_training=False, cls_name='PolicyPlayer'):
         self.device = device
-        with open(net_file) as f:
-            self.net_cfg = yaml.load(f, Loader=yaml.SafeLoader)
-            self.net = NNet(self.net_cfg, cls_name=cls_name).to(device)
+        if isinstance(net, nn.Module):
+            self.net = net.to(device)
+        else:
+            with open(net) as f:
+                net_cfg = yaml.load(f, Loader=yaml.SafeLoader)
+                self.net = NNet(net_cfg, cls_name=cls_name).to(device)
 
         self.player_id = cbd.NoWinner
         self.init_train_params(is_training)
         pass
 
-    def get_action(self, board_section, available_moves=None):
+    def get_action(self, board, **kwargs):
+        available_moves = np.array(board.available_moves, dtype=np.int)
+        board_section = board.get_current_section()
         act_prob = self.net(torch.Tensor(board_section[np.newaxis, :, :, :]).to(self.device))
-        action = act_prob[0].cpu().detach().numpy()
+        action = act_prob[0].cpu().detach().numpy().flatten()
         probs = act_prob[1].cpu().detach().numpy()
-        move_softmax = np.exp(action.flatten())[available_moves]
-        return available_moves[np.argmax(move_softmax)], probs
+        return np.random.choice(available_moves, p=softmax(action[available_moves])), probs.item()
 
     def policy_value_fn(self, board):
         chess_type = board.get_current_player()
         board_section = board.get_board_section(chess_type)
         act_prob = self.net(torch.Tensor(board_section[np.newaxis, :, :, :]).to(self.device))
-        action = act_prob[0].cpu().detach().numpy()
+        action = act_prob[0].cpu().detach().numpy().flatten()
         probs = act_prob[1].cpu().detach().numpy()
-        move_softmax = np.exp(action.flatten())[board.available_moves]
+        move_softmax = softmax(action[board.available_moves])
         return zip(board.available_moves, move_softmax), probs.item()
 
     def set_player_id(self, idx=0):
         self.player_id = idx
         pass
 
-    def init_train_params(self, is_training, device=torch.device('cuda')):
+    def init_train_params(self, is_training, device=torch.device('cuda'), metrics=None):
         dataset_name = 'WZQManuals'
         class_name = self.net.__class__.__name__
         cp_callback = load_breakpoint(self.net, dataset_name, class_name, save_weights_only=True,
@@ -429,7 +435,7 @@ class PolicyNet(object):
         if is_training:
             # 损失函数
             loss = PolicyNetLoss()
-            self.net.compile(optimizer='adam', loss=loss, metrics=['acc'], callbacks=[cp_callback], device=device,
+            self.net.compile(optimizer='adam', loss=loss, metrics=metrics, callbacks=[cp_callback], device=device,
                              data_fn=DataLoader.data_fn)
         pass
 

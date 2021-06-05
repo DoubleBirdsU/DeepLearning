@@ -51,9 +51,8 @@ class NetParser:
         Returns:
             Module: 模块
         """
-        if idx_from is None:
-            in_ch, out_ch = self.net.channels[-1], self.net.channels[-1]
-        elif isinstance(idx_from, int):
+        in_ch, out_ch = self.net.channels[-1], self.net.channels[-1]
+        if isinstance(idx_from, int):
             in_ch, out_ch = self.net.channels[idx_from], self.net.channels[idx_from]
         elif isinstance(idx_from, list) or isinstance(idx_from, list):
             in_ch = [self.net.channels[i] for i in idx_from]
@@ -130,8 +129,8 @@ class NetParser:
         layer = None
         module_type, args, kwargs = layer_param
         out_ch = kwargs['out_ch'] if 'out_ch' in kwargs else channels[-1]
+        args.pop(0)
         if 'Concat' == module_type:
-            args.pop(0)
             layer = layers.Concat(*args, **kwargs)
             out_ch = 0
             for idx in idx_from:
@@ -140,7 +139,6 @@ class NetParser:
             layer = layers.MaxPool2D(*args, **kwargs)
         elif 'UpSample' == module_type:
             layer = layers.UpSample(*args, **kwargs)
-            out_ch = args[1]
         elif 'RoI' == module_type:
             layer = layers.RoI(*args, **kwargs)
             out_ch = in_ch * layer.out_ch_last.prod()

@@ -66,9 +66,10 @@ class NNet(Module):
     def forward_cfg(self, x):
         self.cfg_value_list = [x]
         for from_idx, module in zip(self.cfg_from_list, self.cfg_module_list):
-            self.cfg_value_list.append(
-                module(self.cfg_value_list[from_idx] if isinstance(from_idx, int) else
-                       [self.cfg_value_list[i] for i in from_idx]))
+            if isinstance(from_idx, list):
+                self.cfg_value_list.append(module([self.cfg_value_list[i] for i in from_idx]))
+            else:
+                self.cfg_value_list.append(module(self.cfg_value_list[from_idx]))
         return self.cfg_value_list[-1]
 
     def compile(self, optimizer=None, loss=None, call_params=None, metrics=None, callbacks=None, device=torch.device('cpu'), **kwargs):

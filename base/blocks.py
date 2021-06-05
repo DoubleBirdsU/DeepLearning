@@ -21,6 +21,13 @@ class ModuleBlock(Module):
             x = block(x)
         return x
 
+    def addLayers(self, layers):
+        if not isinstance(layers, nn.ModuleList) and isinstance(layers, list):
+            self.blocks += layers
+        else:
+            self.blocks.append(layers)
+        return super().addLayers(layers)
+
 
 class AlexBlock(Module):
     def __init__(self, in_chs, out_chs, kernel_channels=3,
